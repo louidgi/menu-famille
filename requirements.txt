@@ -6,7 +6,7 @@ certifi==2026.10.23
 charset-normalizer==3.5.2
 click==8.5.1
 extruct==0.18.0
-fastapi==0.162.4
+fastapi==0.163.0
 frostwork==0.2.2
 h11==0.16.0
 html-text==0.7.1
