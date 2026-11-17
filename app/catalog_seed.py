@@ -87,6 +87,24 @@ pain de mie|tranche de pain de mie;tranches de pain de mie|Boulangerie|piece|-|1
 pain|baguette|Boulangerie|piece|250|1|1|baguette|1.1|
 tortillas|galettes de blé;wraps|Boulangerie|piece|-|1|8|paquet de 8|2.2|
 pain à burger|pains à burger|Boulangerie|piece|-|1|4|paquet de 4|1.9|
+yaourt|yaourts;yogourt;yaourt nature|Crèmerie|piece|125|1|8|pack de 8|2.4|
+compote|compotes;compote de pomme|Épicerie|piece|90|1|4|pack de 4|2.0|
+confiture|confitures|Épicerie|piece|-|1|1|pot|2.5|
+miel||Épicerie|g|-|1|250|pot 250 g|4.0|
+biscuits|biscuit;gâteaux secs|Épicerie|piece|-|1|1|paquet|2.0|
+thé|thé noir;thé vert;infusion;tisane|Boissons|piece|-|1|1|boîte|2.5|
+jus de pomme||Boissons|ml|-|1|1000|brique 1 L|1.6|
+pomme|pommes|Fruits et légumes|piece|150|1|-|-|0.4|
+banane|bananes|Fruits et légumes|piece|120|1|-|-|0.3|
+papier toilette||Hygiène et maison|piece|-|1|12|paquet de 12|4.5|
+essuie-tout|sopalin;papier absorbant|Hygiène et maison|piece|-|1|1|rouleau|1.5|
+sacs poubelle|sac poubelle|Hygiène et maison|piece|-|1|1|rouleau|2.5|
+liquide vaisselle|produit vaisselle|Hygiène et maison|ml|-|1|500|flacon 50 cl|2.0|
+lessive||Hygiène et maison|piece|-|1|1|bidon|8.0|
+éponges|éponge|Hygiène et maison|piece|-|1|1|lot|2.0|
+savon|savon liquide;gel douche|Hygiène et maison|piece|-|1|1|flacon|2.5|
+dentifrice||Hygiène et maison|piece|-|1|1|tube|2.0|
+mouchoirs|mouchoir;boîte de mouchoirs|Hygiène et maison|piece|-|1|1|boîte|2.0|
 """
 
 DEFAULT_PRICE = {"g": 0.004, "ml": 0.002, "piece": 0.5}  # € par unité de base si aucun prix connu

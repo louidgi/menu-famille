@@ -114,6 +114,17 @@ class Catalog:
         head = toks_list[0] if toks_list else ""
         return best, (head in best_t or head in DESCRIPTORS)
 
+    def exact(self, label: str) -> str | None:
+        """Nom canonique si le libellé correspond EXACTEMENT (mêmes mots, casse/accents/pluriel ignorés)
+        à un nom ou un alias. Plus strict que match() : pour la saisie libre d'un article."""
+        toks = frozenset(tokens(label))
+        if not toks:
+            return None
+        for t, name in self.phrases:
+            if t == toks:
+                return name
+        return None
+
 
 def to_base(qty: float | None, unit: str | None, ing: dict) -> float | None:
     """Convertit (qty, unit) vers l'unité de base de l'ingrédient (g, ml ou piece). Approximatif : voir README."""
@@ -184,3 +195,19 @@ def resolve(conn, catalog: Catalog, parsed: dict) -> tuple[str, float | None, st
         catalog.rows[name] = dict(conn.execute("SELECT * FROM ingredients WHERE name=?", (name,)).fetchone())
         catalog.phrases.append((frozenset(tokens(name)), name))
     return name, to_base(parsed["qty"], parsed["unit"], catalog.rows[name]), status
+
+
+def find_or_create(conn, catalog: Catalog, label: str) -> str | None:
+    """Article saisi à la main : l'ingrédient du catalogue s'il existe, sinon un nouvel ingrédient « à vérifier »."""
+    label = re.sub(r"\s+", " ", label or "").strip()[:80]
+    if not label:
+        return None
+    name = catalog.exact(label)
+    if name:
+        return name
+    name = label.lower()
+    conn.execute("INSERT OR IGNORE INTO ingredients(name,aliases,aisle,kind,verified) VALUES(?,?,?,?,0)",
+                 (name, "[]", "Divers", "piece"))
+    catalog.rows[name] = dict(conn.execute("SELECT * FROM ingredients WHERE name=?", (name,)).fetchone())
+    catalog.phrases.append((frozenset(tokens(name)), name))
+    return name

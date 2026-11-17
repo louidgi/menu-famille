@@ -6,7 +6,7 @@ from . import config, recipes as R, ingredients as I
 from .settings import get_settings, family_eq
 
 AISLES = ["Fruits et légumes", "Boucherie", "Poissonnerie", "Crèmerie", "Boulangerie", "Épicerie", "Conserves",
-          "Surgelés", "Boissons", "Divers"]
+          "Surgelés", "Boissons", "Hygiène et maison", "Divers"]
 EPS = 1e-6
 
 
@@ -120,8 +120,13 @@ def apply_ops(conn, ops: list[dict]) -> dict:
     """Opérations idempotentes (op_id) : rejouables sans risque après une coupure réseau."""
     today = config.today().isoformat()
     done, skipped = 0, 0
+    cat = None
     for op in ops:
         op_id, kind, name = str(op.get("op_id", "")), op.get("type"), op.get("ingredient")
+        if op_id and name and kind in ("add", "low"):   # saisie libre : on crée l'article s'il est inconnu
+            if cat is None:
+                cat = I.Catalog(conn.execute("SELECT * FROM ingredients").fetchall())
+            name = I.find_or_create(conn, cat, str(name))
         if not op_id or not name or not conn.execute("SELECT 1 FROM ingredients WHERE name=?", (name,)).fetchone():
             skipped += 1
             continue

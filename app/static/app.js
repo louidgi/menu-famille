@@ -260,9 +260,16 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 let shop = lsGet(LS.shop, null);
 function applyLocal(op) {
   if (!shop) return;
-  const it = shop.items.find(i => i.ingredient === op.ingredient);
+  const key = (op.ingredient || '').trim().toLowerCase();
+  let it = shop.items.find(i => i.ingredient.toLowerCase() === key);
+  if (!it && op.type === 'add' && key) {   // article provisoire (hors ligne) ; la liste du serveur le remplacera
+    it = { ingredient: key, aisle: 'Divers', status: 'todo', kind: 'piece', required: 0, in_stock: 0, missing: 1, packs: null,
+           pack_label: null, buy_qty: 1, buy_text: '1', need_text: '1', price: 0, basic: false, verified: false };
+    shop.items.push(it);
+  }
   if (!it) return;
   if (op.type === 'buy' || op.type === 'have') it.status = 'done';
+  else if (op.type === 'add' || op.type === 'low') it.status = 'todo';
   else if (op.type === 'archive') it.status = 'archived';
   else if (op.type === 'unarchive' || op.type === 'unbuy') it.status = 'todo';
   shop.count_todo = shop.items.filter(i => i.status === 'todo').length;
@@ -285,7 +292,7 @@ async function shopOp(op) {
   lsSet(LS.queue, [...lsGet(LS.queue, []), op]);
   applyLocal(op); drawShop();
   try {
-    if (await flush()) drawShop(); else toast('Hors ligne : enregistré, synchronisé au retour du réseau.');
+    if (await flush()) { if (op.type === 'add') state.names = []; drawShop(); } else toast('Hors ligne : enregistré, synchronisé au retour du réseau.');
   } catch (e) { if (e.message !== 'Non connecté') toast('Synchronisation impossible : ' + e.message); }
 }
 let shopRoot = null;
@@ -378,7 +385,7 @@ function recurrentRow(i) {
   return h('div', { class: 'line' }, h('strong', {}, i.name), q, h('button', { onclick: guard(async () => { await api('/ingredients/' + encodeURIComponent(i.name), { method: 'PUT', body: { weekly_qty: +q.value || 0 } }); toast(`${i.name} : ${q.value} ${i.kind === 'piece' ? '' : i.kind} par semaine`); }) }, 'OK'));
 }
 function verifyRow(i) {
-  const aisles = ['Fruits et légumes', 'Boucherie', 'Poissonnerie', 'Crèmerie', 'Boulangerie', 'Épicerie', 'Conserves', 'Surgelés', 'Boissons', 'Divers'];
+  const aisles = ['Fruits et légumes', 'Boucherie', 'Poissonnerie', 'Crèmerie', 'Boulangerie', 'Épicerie', 'Conserves', 'Surgelés', 'Boissons', 'Hygiène et maison', 'Divers'];
   const sel = h('select', { 'aria-label': 'Rayon de ' + i.name }, aisles.map(a => h('option', { value: a, selected: a === i.aisle }, a)));
   const basic = h('input', { type: 'checkbox', 'aria-label': i.name + ' : produit de base' });
   return h('div', { class: 'line' }, h('strong', {}, i.name), sel, h('span', { class: 'row' }, h('label', { class: 'inline', style: 'margin:0' }, basic, 'base'), h('button', { onclick: guard(async () => { await api('/ingredients/' + encodeURIComponent(i.name), { method: 'PUT', body: { aisle: sel.value, is_basic: +basic.checked, verified: 1 } }); toast('Enregistré'); refresh(); }) }, 'OK')));

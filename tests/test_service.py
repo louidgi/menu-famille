@@ -198,3 +198,19 @@ def test_meme_operation_envoyee_en_parallele_n_est_appliquee_qu_une_fois(conn, t
 def test_meme_operation_deux_fois_dans_le_meme_lot(conn):
     r = SH.apply_ops(conn, [{"op_id": "z", "type": "buy", "ingredient": "lait", "qty": 500}] * 2)
     assert r["applied"] == 1 and r["skipped"] == 1
+
+
+def test_ajout_article_inconnu_cree_un_article_a_verifier(conn, rng):
+    PS.ensure_plan(conn, 7, rng=rng)
+    assert SH.apply_ops(conn, [{"op_id": "n1", "type": "add", "ingredient": "  Papier  Alu "}])["applied"] == 1
+    it = next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "papier alu")
+    assert it["status"] == "todo" and it["verified"] is False and it["aisle"] == "Divers"
+    SH.apply_ops(conn, [{"op_id": "n2", "type": "add", "ingredient": "papier alu"}])
+    assert conn.execute("SELECT COUNT(*) c FROM ingredients WHERE name='papier alu'").fetchone()["c"] == 1  # pas de doublon
+
+
+def test_ajout_par_alias_reutilise_l_ingredient_du_catalogue(conn):
+    before = conn.execute("SELECT COUNT(*) c FROM ingredients").fetchone()["c"]
+    SH.apply_ops(conn, [{"op_id": "a1", "type": "add", "ingredient": "Œufs"}])
+    assert conn.execute("SELECT COUNT(*) c FROM ingredients").fetchone()["c"] == before
+    assert next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "oeuf")["status"] == "todo"
