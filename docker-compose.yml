@@ -1,0 +1,21 @@
+services:
+  menu:
+    build: .
+    image: menu-famille:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - menu-data:/data          # base SQLite + sauvegardes quotidiennes (dans /data/backups)
+    expose:
+      - "8000"                   # pas de port publié : seul votre reverse proxy y accède
+    # Rattachez le service au réseau de votre reverse proxy, par exemple :
+    # networks: [proxy]
+    # Pour un premier essai sans proxy (HTTP, COOKIE_SECURE=false dans .env), remplacez « expose » par :
+    # ports: ["127.0.0.1:8000:8000"]
+
+volumes:
+  menu-data:
+
+# networks:
+#   proxy:
+#     external: true
