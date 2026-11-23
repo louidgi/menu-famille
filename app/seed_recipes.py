@@ -3,6 +3,7 @@
 Format : « # titre | protéine | féculent | repas (d/l) | préparation/cuisson en min | mois | tags »,
 puis « ing: ... ; ... » et « steps: ... ## ... »."""
 import re
+from .seed_seasonal import SEED_SEASONAL
 
 SEED = """
 # Spaghetti bolognaise | boeuf | pates | dl | 15/30 | * |
@@ -176,9 +177,9 @@ def _months(spec: str) -> list[int]:
     return [((m - 1) % 12) + 1 for m in range(a, (b if b >= a else b + 12) + 1)]
 
 
-def parse_seed() -> list[dict]:
+def parse_seed(text: str | None = None) -> list[dict]:
     out, cur = [], None
-    for line in SEED.strip().splitlines():
+    for line in (SEED if text is None else text).strip().splitlines():
         line = line.strip()
         if line.startswith("# "):
             f = [x.strip() for x in line[2:].split("|")]
@@ -195,11 +196,17 @@ def parse_seed() -> list[dict]:
 
 
 def load_seed(conn, cat) -> int:
-    """Charge la bibliothèque de départ si la base n'a encore aucune recette."""
+    """Bibliothèque de départ (base sans recette), puis lot saisonnier (une seule fois par base)."""
     from .recipes import save_recipe
-    if conn.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]:
-        return 0
-    data = parse_seed()
-    for d in data:
-        save_recipe(conn, cat, d)
-    return len(data)
+    n = 0
+    if not conn.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]:
+        for d in parse_seed():
+            save_recipe(conn, cat, d); n += 1
+    if not conn.execute("SELECT 1 FROM meta WHERE key='seed_seasonal_v1'").fetchone():
+        have = {r[0] for r in conn.execute("SELECT title FROM recipes")}
+        for d in parse_seed(SEED_SEASONAL):
+            if d["title"] not in have:
+                save_recipe(conn, cat, d); n += 1
+        conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('seed_seasonal_v1','1')")
+        conn.commit()
+    return n

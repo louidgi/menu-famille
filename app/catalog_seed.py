@@ -105,6 +105,15 @@ lessive||Hygiène et maison|piece|-|1|1|bidon|8.0|
 savon|savon liquide;gel douche|Hygiène et maison|piece|-|1|1|flacon|2.5|
 dentifrice||Hygiène et maison|piece|-|1|1|tube|2.0|
 mouchoirs|mouchoir;boîte de mouchoirs|Hygiène et maison|piece|-|1|1|boîte|2.0|
+fromage à raclette|raclette;fromage raclette|Crèmerie|g|-|1|400|barquette 400 g|6.5|
+reblochon||Crèmerie|g|450|1|450|pièce 450 g|5.5|
+charcuterie|jambon cru;jambon sec;coppa;rosette;saucisson|Boucherie|g|-|1|200|barquette 200 g|4.5|
+cornichons|cornichon|Conserves|g|-|1|190|bocal 190 g|1.6|
+chou vert|chou;chou blanc;chou frisé|Fruits et légumes|g|1200|1|-|-|1.6|
+asperges|asperge;asperges vertes;asperges blanches|Fruits et légumes|g|-|1|-|-|7.0|
+radis|radis roses;botte de radis|Fruits et légumes|g|250|1|-|-|3.5|
+concombre|concombres|Fruits et légumes|g|350|1|-|-|1.8|
+melon|melons|Fruits et légumes|piece|800|1|1|pièce|2.5|
 """
 
 DEFAULT_PRICE = {"g": 0.004, "ml": 0.002, "piece": 0.5}  # € par unité de base si aucun prix connu

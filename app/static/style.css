@@ -39,7 +39,7 @@ body {
     padding-bottom: calc(64px + env(safe-area-inset-bottom))
 }
 main {
-    max-width: 640px;
+    max-width: 840px;
     margin: 0 auto;
     padding: calc(14px + env(safe-area-inset-top)) 14px 24px;
     outline: none
