@@ -11,6 +11,11 @@ const euro = n => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'o' + Date.now() + Math.random().toString(16).slice(2));
 const safeUrl = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
+const toggleLock = e => guard(async () => {
+  const y = window.scrollY;
+  await post(`/plan/${e.id}/lock`, { locked: !e.locked });
+  await route(); window.scrollTo(0, y);
+});
 
 // Construction du DOM sans innerHTML : le contenu importé des sites n'est jamais interprété comme du HTML.
 function h(tag, props, ...kids) {
@@ -93,11 +98,13 @@ async function viewMenus() {
   state.settings = settings;
   const today = new Date().toISOString().slice(0, 10);
   const over = plan.budget && plan.total_cost > plan.budget;
+  const nLocked = plan.days.flatMap(d => d.entries).filter(e => e.locked && e.recipe).length;
   const head = [h('div', { class: 'between' }, h('h1', {}, 'Menus'),
     h('button', { onclick: guard(() => dialog((d, close) => { d.append(h('h3', {}, 'Régénérer le planning ?'), h('p', {}, 'Les repas verrouillés et les absences sont conservés, tous les autres sont retirés au hasard.'),
       h('menu', {}, closeBtn(close), h('button', { class: 'primary', onclick: guard(async () => { close(); await post('/plan/generate'); toast('Planning régénéré'); refresh(); }) }, 'Régénérer'))); })) }, 'Régénérer')),
     h('div', { class: 'bar' }, h('span', {}, 'Coût estimé des repas : '), h('strong', {}, euro(plan.total_cost)),
-      plan.budget ? h('span', { class: over ? 'over' : 'muted' }, ` sur ${euro(plan.budget)} de budget`) : h('span', { class: 'muted small' }, ' (budget à régler dans Réglages)'))];
+      plan.budget ? h('span', { class: over ? 'over' : 'muted' }, ` sur ${euro(plan.budget)} de budget`) : h('span', { class: 'muted small' }, ' (budget à régler dans Réglages)'),
+      settings.shopping_locked_only ? h('div', { class: 'small muted' }, `${nLocked} repas verrouillé(s) alimentent la liste de courses.`) : null)];
   return [...head, ...plan.days.map(d => dayBlock(d, d.date === today))];
 }
 function dayBlock(d, isToday) {
@@ -115,7 +122,11 @@ function mealRow(e, d) {
     h('div', { class: 'grow' }, h('div', { class: 'small muted' }, SLOT[e.slot], e.locked ? h('span', { class: 'tag lock' }, 'verrouillé') : null),
       h('button', { class: 'title', onclick: () => { location.hash = '#/recette/' + r.id; } }, r.title),
       h('div', { class: 'small muted' }, [r.minutes ? r.minutes + ' min' : null, PROT[r.protein], e.cost != null ? '≈ ' + euro(e.cost) : null].filter(Boolean).join(' · '))),
-    h('button', { class: 'more', 'aria-label': 'Actions pour ' + r.title, onclick: () => mealMenu(e, d) }, '⋯'));
+    h('div', { class: 'row' },
+      h('button', { class: 'more' + (e.locked ? ' on' : ''), 'aria-pressed': String(e.locked),
+        'aria-label': (e.locked ? 'Déverrouiller ' : 'Verrouiller ') + r.title,
+        onclick: toggleLock(e) }, e.locked ? '🔒' : '🔓'),
+      h('button', { class: 'more', 'aria-label': 'Actions pour ' + r.title, onclick: () => mealMenu(e, d) }, '⋯')));
 }
 function mealMenu(e, d) {
   dialog((dlg, close) => {
@@ -311,13 +322,27 @@ function qtyDialog(it) {
       h('label', {}, `Quantité achetée (${unit})`), q, h('menu', {}, closeBtn(close), h('button', { class: 'primary', onclick: () => { close(); shopOp({ type: 'buy', ingredient: it.ingredient, qty: +q.value || 0 }); } }, 'Acheté')));
   });
 }
+function recipesDialog(it) {
+  dialog((dlg, close) => dlg.append(h('h3', {}, it.ingredient), h('p', { class: 'muted' }, 'Utilisé dans :'),
+    h('div', { class: 'stack' }, it.uses.map(u => h('a', { href: '#/recette/' + u.id, onclick: close }, `${u.title} · ${cap(fmtDate(u.day))}`))),
+    h('menu', {}, closeBtn(close, 'Fermer'))));
+}
+function usesLine(it) {
+  const u = it.uses || [];
+  if (!u.length) return null;
+  const links = u.slice(0, 2).map(x => h('a', { href: '#/recette/' + x.id }, x.title));
+  const parts = [];
+  links.forEach((l, i) => { if (i) parts.push(', '); parts.push(l); });
+  return h('div', { class: 'small muted uses' }, 'Pour : ', parts,
+    u.length > 2 ? [' ', h('button', { class: 'link', onclick: () => recipesDialog(it) }, `+${u.length - 2}`)] : null);
+}
 function itemRow(it) {
   const todo = it.status === 'todo';
   const detail = todo ? [it.packs ? `${it.packs} × ${it.pack_label}` : it.buy_text, it.buy_text && it.packs ? `(${it.buy_text})` : null, it.in_stock > 0 ? `déjà ${it.in_stock >= 1000 && it.kind !== 'piece' ? (it.in_stock / 1000).toLocaleString('fr-FR') + (it.kind === 'g' ? ' kg' : ' L') : Math.round(it.in_stock) + (it.kind === 'piece' ? '' : ' ' + it.kind)} en stock` : null].filter(Boolean).join(' ') : '';
   return h('div', { class: 'item' + (it.status === 'done' ? ' done' : '') },
     it.status === 'archived' ? h('button', { class: 'link', onclick: () => shopOp({ type: 'unarchive', ingredient: it.ingredient }) }, 'Remettre') :
       h('button', { class: 'check primary', 'aria-label': (todo ? 'Acheté : ' : 'Annuler : ') + it.ingredient, onclick: () => todo ? shopOp({ type: 'buy', ingredient: it.ingredient, qty: it.buy_qty }) : shopOp({ type: 'unbuy', ingredient: it.ingredient, qty: it.buy_qty || it.required }) }, todo ? '✓' : '↺'),
-    h('div', { class: 'grow' }, h('div', { class: 'name' }, it.ingredient, it.verified ? null : h('span', { class: 'badge', style: 'margin-left:.4rem' }, 'à vérifier')), h('div', { class: 'small muted' }, detail || it.need_text)),
+    h('div', { class: 'grow' }, h('div', { class: 'name' }, it.ingredient, it.verified ? null : h('span', { class: 'badge', style: 'margin-left:.4rem' }, 'à vérifier')), h('div', { class: 'small muted' }, detail || it.need_text), usesLine(it)),
     todo ? h('button', { 'aria-label': 'Autres actions pour ' + it.ingredient, onclick: () => dialog((dlg, close) => dlg.append(h('h3', {}, it.ingredient), h('div', { class: 'stack' },
       h('button', { onclick: () => { close(); qtyDialog(it); } }, 'Acheté en autre quantité'),
       h('button', { onclick: () => { close(); shopOp({ type: 'have', ingredient: it.ingredient }); } }, 'Déjà à la maison'),
@@ -332,6 +357,7 @@ function drawShop() {
   const add = h('input', { list: 'ingnames', placeholder: 'Ajouter un article (ex. sel, café…)', 'aria-label': 'Ajouter un article' });
   ingredientNames().then(ns => { if (!document.getElementById('ingnames')) shopRoot.append(h('datalist', { id: 'ingnames' }, ns.map(n => h('option', { value: n })))); });
   const nodes = [h('div', { class: 'between' }, h('h1', {}, 'Courses'), h('span', { class: 'muted' }, `${shop.count_todo} à acheter · ≈ ${euro(shop.total_est)}`)),
+    shop.locked_only && shop.locked_meals === 0 ? h('p', { class: 'muted' }, 'Verrouillez des repas dans Menus (🔓) pour ajouter leurs ingrédients ici.') : null,
     !navigator.onLine || q.length ? h('div', { class: 'offline' }, q.length ? `${q.length} action(s) en attente de synchronisation` : 'Hors ligne : liste mémorisée') : null,
     h('form', { class: 'row', onsubmit: ev => { ev.preventDefault(); const v = add.value.trim(); if (!v) return; shopOp({ type: 'add', ingredient: v }); add.value = ''; } }, add, h('button', { type: 'submit' }, 'Ajouter')),
     shop.count_todo === 0 ? h('p', { class: 'muted' }, 'Rien à acheter pour les repas prévus.') : null];
@@ -347,16 +373,18 @@ window.addEventListener('offline', drawShop);
 async function viewSettings() {
   const [s, refused, ings, stock] = await Promise.all([api('/settings'), api('/refused'), api('/ingredients'), api('/stock')]);
   const save = guard(async patch => { await api('/settings', { method: 'PUT', body: patch }); toast('Enregistré'); });
-  const meals = JSON.parse(JSON.stringify(s.meals)), busy = new Set(s.busy_days);
+  const meals = JSON.parse(JSON.stringify(s.meals)), busy = JSON.parse(JSON.stringify(s.busy_slots));
   const f = {
     adults: h('input', { type: 'number', min: 1, value: s.adults }), kids: h('input', { value: s.children_coeffs.join(', ') }),
     days: h('input', { type: 'number', min: 1, max: 21, value: s.plan_days }), budget: h('input', { type: 'number', min: 0, step: 5, value: s.weekly_budget ?? '', placeholder: 'Aucun' }),
     rep: h('input', { type: 'number', min: 0, value: s.no_repeat_days }),
+    lockedOnly: h('input', { type: 'checkbox', checked: s.shopping_locked_only }),
   };
   const matrix = h('div', { class: 'matrix' }, h('span'), h('strong', {}, 'Déjeuner'), h('strong', {}, 'Dîner'),
     DAYS.map((n, i) => [h('span', {}, n), h('input', { type: 'checkbox', checked: meals[i].lunch, 'aria-label': n + ' déjeuner', onchange: e => { meals[i].lunch = e.target.checked; } }), h('input', { type: 'checkbox', checked: meals[i].dinner, 'aria-label': n + ' dîner', onchange: e => { meals[i].dinner = e.target.checked; } })]));
-  const busyBox = h('div', { class: 'row', style: 'flex-wrap:wrap' }, DAYS.map((n, i) => h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: busy.has(i), onchange: e => e.target.checked ? busy.add(i) : busy.delete(i) }), n.slice(0, 3))));
-  const refList = h('div', {});
+  const busyBox = h('div', { class: 'matrix' }, h('span'), h('strong', {}, 'Midi'), h('strong', {}, 'Soir'), DAYS.map((n, i) => [h('span', {}, n),
+    h('input', { type: 'checkbox', checked: !!busy[i]?.lunch, 'aria-label': n + ' midi chargé', onchange: e => { (busy[i] ||= {}).lunch = e.target.checked; } }),
+    h('input', { type: 'checkbox', checked: !!busy[i]?.dinner, 'aria-label': n + ' soir chargé', onchange: e => { (busy[i] ||= {}).dinner = e.target.checked; } })]));const refList = h('div', {});
   const drawRef = list => refList.replaceChildren(...(list.length ? list.map(n => h('span', { class: 'tag', style: 'margin:.2rem' }, n, ' ', h('button', { class: 'link', 'aria-label': 'Retirer ' + n, onclick: guard(async () => { await api('/refused/' + encodeURIComponent(n), { method: 'DELETE' }); drawRef(list.filter(x => x !== n)); }) }, '×'))) : [h('span', { class: 'muted small' }, 'Aucun pour le moment')]));
   drawRef(refused);
   const newRef = h('input', { placeholder: 'Ajouter un ingrédient refusé' });
@@ -368,8 +396,10 @@ async function viewSettings() {
     h('h2', {}, 'Famille'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Adultes'), f.adults), h('div', {}, h('label', {}, 'Enfants (part d\'adulte)'), f.kids)),
     h('p', { class: 'small muted' }, 'Ex. 0.5, 0.6, 0.7 pour des enfants de 3, 4 et 7 ans : 0,5 = la moitié d\'une portion d\'adulte.'),
     h('h2', { style: 'margin-top:1.2rem' }, 'Planning'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Jours affichés'), f.days), h('div', {}, h('label', {}, 'Budget par semaine (€)'), f.budget)),
-    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep, h('label', {}, 'Repas à planifier'), matrix, h('label', {}, 'Jours chargés (recettes rapides)'), busyBox,
-    h('p', {}, h('button', { class: 'primary', onclick: () => { const kids = f.kids.value.split(/[,;\s]+/).map(x => parseFloat(x.replace(',', '.'))).filter(x => x > 0); save({ adults: +f.adults.value || 1, children_coeffs: kids, plan_days: +f.days.value || 7, weekly_budget: f.budget.value === '' ? null : +f.budget.value, no_repeat_days: +f.rep.value || 0, meals, busy_days: [...busy] }); } }, 'Enregistrer')),
+    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep, h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'), h('label', {}, 'Repas à planifier'), matrix, h('label', {}, 'Repas chargés (recettes rapides)'), busyBox,
+    h('p', {}, h('button', { class: 'primary', onclick: () => { const kids = f.kids.value.split(/[,;\s]+/).map(x => parseFloat(x.replace(',', '.'))).filter(x => x > 0); save({ adults: +f.adults.value || 1, children_coeffs: kids, plan_days: +f.days.value || 7,
+       weekly_budget: f.budget.value === '' ? null : +f.budget.value, no_repeat_days: +f.rep.value || 0,
+       shopping_locked_only: f.lockedOnly.checked, meals, busy_slots: busy }); } }, 'Enregistrer')),
     h('h2', { style: 'margin-top:1.2rem' }, 'Ingrédients refusés'), refList,
     h('form', { class: 'row', onsubmit: guard(async ev => { ev.preventDefault(); if (!newRef.value.trim()) return; const r = await post('/refused', { name: newRef.value }); newRef.value = ''; drawRef([...new Set([...(await api('/refused'))])]); }) }, newRef, h('button', { type: 'submit' }, 'Ajouter')),
     h('h2', { style: 'margin-top:1.2rem' }, 'Stock à la maison'), stockList,

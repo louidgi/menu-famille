@@ -86,11 +86,20 @@ def test_jours_charges_preferent_le_rapide():
     p = [mk(i, "porc" if i % 2 else "boeuf", minutes=90 if i < 10 else 20) for i in range(1, 20)]
     wins = 0
     for seed in range(20):
-        res = generate([(D0, "dinner")], p, {}, [], frozenset(), {0}, rng=random.Random(seed))  # lundi chargé
+        res = generate([(D0, "dinner")], p, {}, [], frozenset(), {(0, "dinner")}, rng=random.Random(seed))  # lundi chargé
         wins += res[(D0, "dinner")].minutes <= 30
     assert wins >= 18
 
-
+def test_midi_charge_soir_calme():
+    p = [mk(i, "porc" if i % 2 else "boeuf", minutes=90 if i < 10 else 20) for i in range(1, 20)]
+    fast_lunch = slow_dinner = 0
+    for seed in range(20):
+        res = generate([(D0, "lunch"), (D0, "dinner")], p, {}, [], frozenset(), {(0, "lunch")}, rng=random.Random(seed))
+        fast_lunch += res[(D0, "lunch")].minutes <= 30
+        slow_dinner += res[(D0, "dinner")].minutes > 30
+    assert fast_lunch >= 18      # le midi chargé reste rapide
+    assert slow_dinner >= 1      # le soir calme n'est pas contraint
+    
 def test_saison_penalisee():
     p = [mk(i, "porc" if i % 2 else "boeuf", months=(6, 7, 8)) for i in range(1, 6)] + [mk(10, "veggie")]
     res = generate([(D0, "dinner")], p, {}, [], frozenset(), set(), rng=random.Random(0))

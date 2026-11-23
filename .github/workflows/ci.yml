@@ -44,7 +44,7 @@ jobs:
           curl -fs http://127.0.0.1:8000/healthz
           curl -fs -c jar -H 'Content-Type: application/json' -d '{"password":"ci-password"}' http://127.0.0.1:8000/api/login
           n=$(curl -fs -b jar http://127.0.0.1:8000/api/recipes | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')
-          echo "recettes en bibliothèque : $n"; test "$n" -ge 40
+          echo "recettes en bibliothèque : $n"; test "$n" -ge 60
           curl -fs -b jar "http://127.0.0.1:8000/api/plan?days=7" > /dev/null
       - name: Journaux du conteneur
         if: always()

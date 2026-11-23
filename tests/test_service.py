@@ -214,3 +214,40 @@ def test_ajout_par_alias_reutilise_l_ingredient_du_catalogue(conn):
     SH.apply_ops(conn, [{"op_id": "a1", "type": "add", "ingredient": "Œufs"}])
     assert conn.execute("SELECT COUNT(*) c FROM ingredients").fetchone()["c"] == before
     assert next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "oeuf")["status"] == "todo"
+
+
+REC = {"lait", "céréales", "café"}   # récurrents : toujours présents
+def _todo(conn):
+    return {i["ingredient"] for i in SH.compute_list(conn)["items"] if i["status"] == "todo"} - REC
+
+def test_courses_suivent_le_verrouillage(conn, rng):
+    from app.settings import put_settings
+    PS.ensure_plan(conn, 7, rng=rng)
+    put_settings(conn, {"shopping_locked_only": True})
+    assert _todo(conn) == set()
+    first = rows(conn)[0]
+    PS.set_lock(conn, first["id"], True)
+    expected = {i["ingredient"] for i in R.recipe_ingredients(conn, first["recipe_id"])
+                if not i["is_basic"] and not i["optional"]} - REC
+    assert _todo(conn) == expected
+    PS.set_lock(conn, first["id"], False)
+    assert _todo(conn) == set()
+
+def test_migration_jours_charges_vers_creneaux(conn):
+    conn.execute("INSERT INTO settings(key,value) VALUES('busy_days','[2]')")
+    conn.commit()
+    s = get_settings(conn)
+    assert s["busy_slots"]["2"] == {"lunch": True, "dinner": True} and s["busy_slots"]["0"] == {"lunch": False, "dinner": False}
+    from app.settings import put_settings, busy_set
+    put_settings(conn, {"busy_slots": {"2": {"lunch": True, "dinner": False}}})
+    assert busy_set(get_settings(conn)) == {(2, "lunch")}
+
+def test_courses_indiquent_les_recettes_concernees(conn, rng):
+    PS.ensure_plan(conn, 7, rng=rng)
+    first = rows(conn)[0]
+    ing = next(i for i in R.recipe_ingredients(conn, first["recipe_id"]) if not i["is_basic"] and not i["optional"] and i["qty"])
+    item = next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == ing["ingredient"])
+    assert first["recipe_id"] in {u["id"] for u in item["uses"]}
+    for it in SH.compute_list(conn)["items"]:          # chaque lien désigne bien une recette qui contient l'ingrédient
+        for u in it["uses"]:
+            assert it["ingredient"] in {i["ingredient"] for i in R.recipe_ingredients(conn, u["id"])}

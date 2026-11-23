@@ -57,7 +57,7 @@ def _score(c: Cand, slot: Slot, ctx, busy, in_stock, w_cost=0.25) -> float:
         s += 1.0
     if c.protein in RED_MEAT and sum(1 for x in win if x.protein in RED_MEAT) >= 2:
         s -= 3.0
-    if day.weekday() in busy:
+    if (day.weekday(), slot[1]) in busy:
         s += 1.0 if c.minutes <= 30 else (-3.0 if c.minutes > 35 else 0.0)
     if c.months and day.month not in c.months:
         s -= 4.0
