@@ -322,13 +322,27 @@ function qtyDialog(it) {
       h('label', {}, `Quantité achetée (${unit})`), q, h('menu', {}, closeBtn(close), h('button', { class: 'primary', onclick: () => { close(); shopOp({ type: 'buy', ingredient: it.ingredient, qty: +q.value || 0 }); } }, 'Acheté')));
   });
 }
+function recipesDialog(it) {
+  dialog((dlg, close) => dlg.append(h('h3', {}, it.ingredient), h('p', { class: 'muted' }, 'Utilisé dans :'),
+    h('div', { class: 'stack' }, it.uses.map(u => h('a', { href: '#/recette/' + u.id, onclick: close }, `${u.title} · ${cap(fmtDate(u.day))}`))),
+    h('menu', {}, closeBtn(close, 'Fermer'))));
+}
+function usesLine(it) {
+  const u = it.uses || [];
+  if (!u.length) return null;
+  const links = u.slice(0, 2).map(x => h('a', { href: '#/recette/' + x.id }, x.title));
+  const parts = [];
+  links.forEach((l, i) => { if (i) parts.push(', '); parts.push(l); });
+  return h('div', { class: 'small muted uses' }, 'Pour : ', parts,
+    u.length > 2 ? [' ', h('button', { class: 'link', onclick: () => recipesDialog(it) }, `+${u.length - 2}`)] : null);
+}
 function itemRow(it) {
   const todo = it.status === 'todo';
   const detail = todo ? [it.packs ? `${it.packs} × ${it.pack_label}` : it.buy_text, it.buy_text && it.packs ? `(${it.buy_text})` : null, it.in_stock > 0 ? `déjà ${it.in_stock >= 1000 && it.kind !== 'piece' ? (it.in_stock / 1000).toLocaleString('fr-FR') + (it.kind === 'g' ? ' kg' : ' L') : Math.round(it.in_stock) + (it.kind === 'piece' ? '' : ' ' + it.kind)} en stock` : null].filter(Boolean).join(' ') : '';
   return h('div', { class: 'item' + (it.status === 'done' ? ' done' : '') },
     it.status === 'archived' ? h('button', { class: 'link', onclick: () => shopOp({ type: 'unarchive', ingredient: it.ingredient }) }, 'Remettre') :
       h('button', { class: 'check primary', 'aria-label': (todo ? 'Acheté : ' : 'Annuler : ') + it.ingredient, onclick: () => todo ? shopOp({ type: 'buy', ingredient: it.ingredient, qty: it.buy_qty }) : shopOp({ type: 'unbuy', ingredient: it.ingredient, qty: it.buy_qty || it.required }) }, todo ? '✓' : '↺'),
-    h('div', { class: 'grow' }, h('div', { class: 'name' }, it.ingredient, it.verified ? null : h('span', { class: 'badge', style: 'margin-left:.4rem' }, 'à vérifier')), h('div', { class: 'small muted' }, detail || it.need_text)),
+    h('div', { class: 'grow' }, h('div', { class: 'name' }, it.ingredient, it.verified ? null : h('span', { class: 'badge', style: 'margin-left:.4rem' }, 'à vérifier')), h('div', { class: 'small muted' }, detail || it.need_text), usesLine(it)),
     todo ? h('button', { 'aria-label': 'Autres actions pour ' + it.ingredient, onclick: () => dialog((dlg, close) => dlg.append(h('h3', {}, it.ingredient), h('div', { class: 'stack' },
       h('button', { onclick: () => { close(); qtyDialog(it); } }, 'Acheté en autre quantité'),
       h('button', { onclick: () => { close(); shopOp({ type: 'have', ingredient: it.ingredient }); } }, 'Déjà à la maison'),

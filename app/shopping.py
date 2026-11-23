@@ -46,25 +46,35 @@ def process_past(conn) -> None:
     conn.commit()
 
 
-def needs(conn) -> tuple[dict, int]:
+def needs_detail(conn) -> tuple[dict, int, dict]:
+    """Besoins cumulés (hors basiques), horizon en jours, et recettes concernées par ingrédient."""
     today = config.today()
     s = get_settings(conn)
     fam = family_eq(s)
     only_locked = " AND p.locked=1" if s["shopping_locked_only"] else ""   # constante, pas d'entrée utilisateur
     need: dict[str, float] = {}
+    uses: dict[str, dict[int, dict]] = {}
     last = today
-    for p in conn.execute("SELECT p.day, p.recipe_id, r.servings FROM plan p JOIN recipes r ON r.id=p.recipe_id "
-                          "WHERE p.day >= ? AND p.status='planned' AND p.consumed=0" + only_locked,
+    for p in conn.execute("SELECT p.day, p.recipe_id, r.servings, r.title, r.archived FROM plan p "
+                          "JOIN recipes r ON r.id=p.recipe_id "
+                          "WHERE p.day >= ? AND p.status='planned' AND p.consumed=0" + only_locked + " ORDER BY p.day, p.slot",
                           (today.isoformat(),)):
         last = max(last, date.fromisoformat(p["day"]))
         for ri in R.recipe_ingredients(conn, p["recipe_id"]):
             if not ri["is_basic"] and not ri["optional"] and ri["qty"] is not None:
                 need[ri["ingredient"]] = need.get(ri["ingredient"], 0) + ri["qty"] * fam / p["servings"]
+                if not p["archived"]:   # une recette archivée n'a plus de fiche : pas de lien
+                    uses.setdefault(ri["ingredient"], {}).setdefault(
+                        p["recipe_id"], {"id": p["recipe_id"], "title": p["title"], "day": p["day"]})
     horizon = max(7, (last - today).days + 1)
     for ing in conn.execute("SELECT name, weekly_qty FROM ingredients WHERE is_recurrent=1 AND weekly_qty>0"):
         need[ing["name"]] = need.get(ing["name"], 0) + ing["weekly_qty"] / 7 * horizon
-    return need, horizon
+    return need, horizon, {k: list(v.values()) for k, v in uses.items()}
 
+
+def needs(conn) -> tuple[dict, int]:
+    need, horizon, _ = needs_detail(conn)
+    return need, horizon
 
 def _buy(ing: dict, missing: float) -> tuple[int | None, float, float]:
     """(nombre de paquets ou None si vrac, quantité à acheter, prix estimé)."""
@@ -81,7 +91,7 @@ def _buy(ing: dict, missing: float) -> tuple[int | None, float, float]:
 def compute_list(conn) -> dict:
     process_past(conn)
     today = config.today().isoformat()
-    need, _ = needs(conn)
+    need, _, uses = needs_detail(conn)
     stock = {r["ingredient"]: r["qty"] for r in conn.execute("SELECT * FROM stock")}
     state = {r["ingredient"]: dict(r) for r in conn.execute("SELECT * FROM shop_state")}
     ings = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM ingredients")}
@@ -105,12 +115,22 @@ def compute_list(conn) -> dict:
         else:
             continue
         packs, buy_qty, price = _buy(ing, missing if missing > EPS else 0.0) if status != "done" else (None, 0, 0)
-        items.append({"ingredient": n, "aisle": ing["aisle"], "status": status, "kind": ing["kind"],
-                      "required": round(req, 2), "in_stock": round(have, 2), "missing": round(missing, 2),
-                      "packs": packs, "pack_label": ing["pack_label"], "buy_qty": buy_qty,
+        items.append({"ingredient": n,
+                      "aisle": ing["aisle"],
+                      "status": status,
+                      "kind": ing["kind"],
+                      "required": round(req, 2),
+                      "in_stock": round(have, 2),
+                      "missing": round(missing, 2),
+                      "packs": packs,
+                      "pack_label": ing["pack_label"],
+                      "buy_qty": buy_qty,
                       "buy_text": R.fmt_qty(buy_qty, ing["kind"]) if status != "done" else "",
                       "need_text": R.fmt_qty(missing, ing["kind"]) if status != "done" else R.fmt_qty(req, ing["kind"]),
-                      "price": price, "basic": bool(ing["is_basic"]), "verified": bool(ing["verified"])})
+                      "price": price,
+                      "basic": bool(ing["is_basic"]),
+                      "verified": bool(ing["verified"]),
+                      "uses": uses.get(n, [])})
     conn.commit()
     order = {a: i for i, a in enumerate(AISLES)}
     items.sort(key=lambda x: (order.get(x["aisle"], 99), x["ingredient"]))

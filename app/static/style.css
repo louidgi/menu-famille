@@ -386,6 +386,13 @@ dialog .stack {
     margin: .3rem 0;
     align-items: center
 }
+.uses a {
+    color: var(--herb-d)
+}
+.uses button.link {
+    min-height: 0;
+    padding: 0 .2rem
+}
 @media (max-width: 420px) {
     .line {
         grid-template-columns: 1fr

@@ -241,3 +241,13 @@ def test_migration_jours_charges_vers_creneaux(conn):
     from app.settings import put_settings, busy_set
     put_settings(conn, {"busy_slots": {"2": {"lunch": True, "dinner": False}}})
     assert busy_set(get_settings(conn)) == {(2, "lunch")}
+
+def test_courses_indiquent_les_recettes_concernees(conn, rng):
+    PS.ensure_plan(conn, 7, rng=rng)
+    first = rows(conn)[0]
+    ing = next(i for i in R.recipe_ingredients(conn, first["recipe_id"]) if not i["is_basic"] and not i["optional"] and i["qty"])
+    item = next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == ing["ingredient"])
+    assert first["recipe_id"] in {u["id"] for u in item["uses"]}
+    for it in SH.compute_list(conn)["items"]:          # chaque lien désigne bien une recette qui contient l'ingrédient
+        for u in it["uses"]:
+            assert it["ingredient"] in {i["ingredient"] for i in R.recipe_ingredients(conn, u["id"])}
