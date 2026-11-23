@@ -232,3 +232,12 @@ def test_courses_suivent_le_verrouillage(conn, rng):
     assert _todo(conn) == expected
     PS.set_lock(conn, first["id"], False)
     assert _todo(conn) == set()
+
+def test_migration_jours_charges_vers_creneaux(conn):
+    conn.execute("INSERT INTO settings(key,value) VALUES('busy_days','[2]')")
+    conn.commit()
+    s = get_settings(conn)
+    assert s["busy_slots"]["2"] == {"lunch": True, "dinner": True} and s["busy_slots"]["0"] == {"lunch": False, "dinner": False}
+    from app.settings import put_settings, busy_set
+    put_settings(conn, {"busy_slots": {"2": {"lunch": True, "dinner": False}}})
+    assert busy_set(get_settings(conn)) == {(2, "lunch")}

@@ -115,8 +115,6 @@ def compute_list(conn) -> dict:
     order = {a: i for i, a in enumerate(AISLES)}
     items.sort(key=lambda x: (order.get(x["aisle"], 99), x["ingredient"]))
     todo = [i for i in items if i["status"] == "todo"]
-#    return {"items": items, "total_est": round(sum(i["price"] for i in todo), 2), "count_todo": len(todo)}
-
     s = get_settings(conn)
     locked = conn.execute("SELECT COUNT(*) FROM plan p JOIN recipes r ON r.id=p.recipe_id WHERE p.day>=? "
                           "AND p.status='planned' AND p.locked=1", (today,)).fetchone()[0]

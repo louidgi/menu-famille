@@ -3,7 +3,7 @@
 import json, random
 from datetime import date, timedelta
 from . import config, planner as P, recipes as R, ingredients as I
-from .settings import get_settings, family_eq
+from .settings import get_settings, family_eq, busy_set
 from .shopping import process_past, add_stock
 
 WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -74,7 +74,7 @@ def _fill(conn, slots, *, exclude_ids=(), max_cost=None, avoid_ids=frozenset(), 
         budget = float(s["weekly_budget"]) * max(1, (hi - lo).days + 1) / 7
         budget -= sum(c.cost for (d, sl), c in fixed.items() if lo <= d <= hi)
     return P.generate(slots, list(cands.values()), {k: v for k, v in fixed.items() if k not in set(slots)}, recent,
-                      _refused(conn), set(s["busy_days"]), in_stock=_stock_names(conn), budget=budget,
+                      _refused(conn), busy_set(s), in_stock=_stock_names(conn), budget=budget,
                       max_cost=max_cost, avoid_ids=avoid_ids, no_repeat_days=s["no_repeat_days"], rng=rng)
 
 

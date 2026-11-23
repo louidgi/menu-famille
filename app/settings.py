@@ -11,16 +11,25 @@ DEFAULTS = {
     "weekly_budget": None,
     "no_repeat_days": 21,
     "shopping_locked_only": False,   # courses = repas verrouillés seulement
+    "busy_slots": {str(d): {"lunch": False, "dinner": d in (0, 3)} for d in range(7)},  # 0 = lundi
 }
-
 
 def get_settings(conn) -> dict:
     s = deepcopy(DEFAULTS)
-    for r in conn.execute("SELECT key, value FROM settings"):
-        if r["key"] in s:
-            s[r["key"]] = json.loads(r["value"])
+    stored = {r["key"]: json.loads(r["value"]) for r in conn.execute("SELECT key, value FROM settings")}
+    for k in s:
+        if k in stored:
+            s[k] = stored[k]
+    # Migration : ancien réglage « jours chargés » (midi et soir) tant que busy_slots n'a pas été enregistré
+    if "busy_slots" not in stored and "busy_days" in stored:
+        old = set(stored["busy_days"])
+        s["busy_slots"] = {str(d): {"lunch": d in old, "dinner": d in old} for d in range(7)}
     return s
 
+
+def busy_set(s: dict) -> set:
+    """{(jour_de_semaine, 'lunch'|'dinner')} des repas chargés."""
+    return {(int(d), sl) for d, m in s["busy_slots"].items() for sl, v in m.items() if v}
 
 def put_settings(conn, patch: dict) -> dict:
     for k, v in patch.items():
