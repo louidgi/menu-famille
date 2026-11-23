@@ -47,13 +47,15 @@ def process_past(conn) -> None:
 
 
 def needs(conn) -> tuple[dict, int]:
-    """Besoins cumulés des repas à venir (hors basiques) + durée de l'horizon en jours."""
     today = config.today()
-    fam = family_eq(get_settings(conn))
+    s = get_settings(conn)
+    fam = family_eq(s)
+    only_locked = " AND p.locked=1" if s["shopping_locked_only"] else ""   # constante, pas d'entrée utilisateur
     need: dict[str, float] = {}
     last = today
     for p in conn.execute("SELECT p.day, p.recipe_id, r.servings FROM plan p JOIN recipes r ON r.id=p.recipe_id "
-                          "WHERE p.day >= ? AND p.status='planned' AND p.consumed=0", (today.isoformat(),)):
+                          "WHERE p.day >= ? AND p.status='planned' AND p.consumed=0" + only_locked,
+                          (today.isoformat(),)):
         last = max(last, date.fromisoformat(p["day"]))
         for ri in R.recipe_ingredients(conn, p["recipe_id"]):
             if not ri["is_basic"] and not ri["optional"] and ri["qty"] is not None:
@@ -113,7 +115,13 @@ def compute_list(conn) -> dict:
     order = {a: i for i, a in enumerate(AISLES)}
     items.sort(key=lambda x: (order.get(x["aisle"], 99), x["ingredient"]))
     todo = [i for i in items if i["status"] == "todo"]
-    return {"items": items, "total_est": round(sum(i["price"] for i in todo), 2), "count_todo": len(todo)}
+#    return {"items": items, "total_est": round(sum(i["price"] for i in todo), 2), "count_todo": len(todo)}
+
+    s = get_settings(conn)
+    locked = conn.execute("SELECT COUNT(*) FROM plan p JOIN recipes r ON r.id=p.recipe_id WHERE p.day>=? "
+                          "AND p.status='planned' AND p.locked=1", (today,)).fetchone()[0]
+    return {"items": items, "total_est": round(sum(i["price"] for i in todo), 2), "count_todo": len(todo),
+            "locked_only": bool(s["shopping_locked_only"]), "locked_meals": locked}
 
 
 def apply_ops(conn, ops: list[dict]) -> dict:

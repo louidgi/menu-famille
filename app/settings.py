@@ -10,6 +10,7 @@ DEFAULTS = {
     "busy_days": [0, 3],
     "weekly_budget": None,
     "no_repeat_days": 21,
+    "shopping_locked_only": False,   # courses = repas verrouillés seulement
 }
 
 

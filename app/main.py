@@ -336,6 +336,7 @@ class Ops(BaseModel):
 
 @api.get("/shopping")
 def shopping_get(conn=db_dep):
+    PS.ensure_plan(conn)
     return SH.compute_list(conn)
 
 

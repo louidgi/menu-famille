@@ -214,3 +214,21 @@ def test_ajout_par_alias_reutilise_l_ingredient_du_catalogue(conn):
     SH.apply_ops(conn, [{"op_id": "a1", "type": "add", "ingredient": "Œufs"}])
     assert conn.execute("SELECT COUNT(*) c FROM ingredients").fetchone()["c"] == before
     assert next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "oeuf")["status"] == "todo"
+
+
+REC = {"lait", "céréales", "café"}   # récurrents : toujours présents
+def _todo(conn):
+    return {i["ingredient"] for i in SH.compute_list(conn)["items"] if i["status"] == "todo"} - REC
+
+def test_courses_suivent_le_verrouillage(conn, rng):
+    from app.settings import put_settings
+    PS.ensure_plan(conn, 7, rng=rng)
+    put_settings(conn, {"shopping_locked_only": True})
+    assert _todo(conn) == set()
+    first = rows(conn)[0]
+    PS.set_lock(conn, first["id"], True)
+    expected = {i["ingredient"] for i in R.recipe_ingredients(conn, first["recipe_id"])
+                if not i["is_basic"] and not i["optional"]} - REC
+    assert _todo(conn) == expected
+    PS.set_lock(conn, first["id"], False)
+    assert _todo(conn) == set()
