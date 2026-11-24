@@ -12,6 +12,7 @@ DEFAULTS = {
     "no_repeat_days": 21,
     "shopping_locked_only": False,   # courses = repas verrouillés seulement
     "busy_slots": {str(d): {"lunch": False, "dinner": d in (0, 3)} for d in range(7)},  # 0 = lundi
+    "fish_days": [4],   # jours « poisson » par défaut (0 = lundi) ; vendredi
 }
 
 def get_settings(conn) -> dict:
@@ -33,6 +34,8 @@ def busy_set(s: dict) -> set:
 
 def put_settings(conn, patch: dict) -> dict:
     for k, v in patch.items():
+        if k == "fish_days":   # int() est appelé ailleurs : on refuse tout ce qui n'est pas un jour valide
+            v = sorted({int(x) for x in v if str(x).isdigit() and 0 <= int(x) <= 6})
         if k in DEFAULTS:
             conn.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, json.dumps(v)))
     conn.commit()

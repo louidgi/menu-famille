@@ -132,6 +132,7 @@ class Replace(BaseModel):
     reason: str
     ingredient: str | None = None
     regenerate_following: bool = True
+    allow_non_fish: bool = False
 
 
 class Following(BaseModel):
@@ -164,7 +165,8 @@ def plan_add(body: Slot, conn=db_dep):
 
 @api.post("/plan/{pid}/replace")
 def plan_replace(pid: int, body: Replace, conn=db_dep):
-    return _plan_call(PS.replace_meal, conn, pid, body.reason, body.ingredient, body.regenerate_following)
+    return _plan_call(PS.replace_meal, conn, pid, body.reason, body.ingredient, body.regenerate_following,
+                      allow_non_fish=body.allow_non_fish)
 
 
 @api.post("/plan/{pid}/skip")

@@ -147,18 +147,21 @@ async function changeDialog(e, d) {
     const free = h('input', { placeholder: 'Ingrédient refusé', hidden: !!opts.length });
     sel.onchange = () => { free.hidden = sel.value !== ''; };
     const f = followBox();
+    const isFishDay = (state.settings?.fish_days || []).includes((new Date(d.date + 'T12:00:00').getDay() + 6) % 7);
+    const nf = h('input', { type: 'checkbox' });
     dlg.append(h('h3', {}, 'Pourquoi changer ce repas ?'), h('form', { id: 'chg' },
       h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'why', value: 'refuse_ingredient', checked: true }), 'Un ingrédient ne convient pas'),
       h('div', {}, sel, free),
       h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'why', value: 'too_expensive' }), 'Trop cher (pour ce remplacement seulement)'),
       h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'why', value: 'other' }), 'Autre envie'),
       h('label', { class: 'inline' }, f, 'Régénérer les repas suivants pour rester équilibré')),
+      isFishDay ? h('label', { class: 'inline' }, nf, 'Sans poisson (ce jour est un jour de poisson)') : null,
       h('p', { class: 'small muted' }, 'Un ingrédient refusé est mémorisé pour tous les menus suivants ; vous pourrez le retirer dans Réglages.'),
       h('menu', {}, closeBtn(close), h('button', { class: 'primary', onclick: guard(async () => {
         const why = dlg.querySelector('input[name=why]:checked').value;
         const ing = sel.value || free.value.trim();
         if (why === 'refuse_ingredient' && !ing) { toast('Indiquez l\'ingrédient refusé'); return; }
-        const r = await post(`/plan/${e.id}/replace`, { reason: why, ingredient: why === 'refuse_ingredient' ? ing : null, regenerate_following: f.checked });
+        const r = await post(`/plan/${e.id}/replace`, { reason: why, ingredient: why === 'refuse_ingredient' ? ing : null, regenerate_following: f.checked, allow_non_fish: nf.checked });
         close(); toast(r.regenerated ? `Repas changé, ${r.regenerated} repas suivants ajustés` : 'Repas changé'); refresh();
       }) }, 'Changer')));
   });
@@ -385,6 +388,9 @@ async function viewSettings() {
   const busyBox = h('div', { class: 'matrix' }, h('span'), h('strong', {}, 'Midi'), h('strong', {}, 'Soir'), DAYS.map((n, i) => [h('span', {}, n),
     h('input', { type: 'checkbox', checked: !!busy[i]?.lunch, 'aria-label': n + ' midi chargé', onchange: e => { (busy[i] ||= {}).lunch = e.target.checked; } }),
     h('input', { type: 'checkbox', checked: !!busy[i]?.dinner, 'aria-label': n + ' soir chargé', onchange: e => { (busy[i] ||= {}).dinner = e.target.checked; } })]));const refList = h('div', {});
+  const fish = new Set(s.fish_days);
+  const fishBox = h('div', { class: 'row', style: 'flex-wrap:wrap' }, DAYS.map((n, i) => h('label', { class: 'inline' },
+    h('input', { type: 'checkbox', checked: fish.has(i), 'aria-label': n + ' : poisson', onchange: e => e.target.checked ? fish.add(i) : fish.delete(i) }), n.slice(0, 3))));
   const drawRef = list => refList.replaceChildren(...(list.length ? list.map(n => h('span', { class: 'tag', style: 'margin:.2rem' }, n, ' ', h('button', { class: 'link', 'aria-label': 'Retirer ' + n, onclick: guard(async () => { await api('/refused/' + encodeURIComponent(n), { method: 'DELETE' }); drawRef(list.filter(x => x !== n)); }) }, '×'))) : [h('span', { class: 'muted small' }, 'Aucun pour le moment')]));
   drawRef(refused);
   const newRef = h('input', { placeholder: 'Ajouter un ingrédient refusé' });
@@ -396,10 +402,10 @@ async function viewSettings() {
     h('h2', {}, 'Famille'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Adultes'), f.adults), h('div', {}, h('label', {}, 'Enfants (part d\'adulte)'), f.kids)),
     h('p', { class: 'small muted' }, 'Ex. 0.5, 0.6, 0.7 pour des enfants de 3, 4 et 7 ans : 0,5 = la moitié d\'une portion d\'adulte.'),
     h('h2', { style: 'margin-top:1.2rem' }, 'Planning'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Jours affichés'), f.days), h('div', {}, h('label', {}, 'Budget par semaine (€)'), f.budget)),
-    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep, h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'), h('label', {}, 'Repas à planifier'), matrix, h('label', {}, 'Repas chargés (recettes rapides)'), busyBox,
+    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep, h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'), h('label', {}, 'Repas à planifier'), matrix, h('label', {}, 'Repas chargés (recettes rapides)'), busyBox, h('label', {}, 'Jours poisson (recettes au poisson par défaut)'), fishBox,
     h('p', {}, h('button', { class: 'primary', onclick: () => { const kids = f.kids.value.split(/[,;\s]+/).map(x => parseFloat(x.replace(',', '.'))).filter(x => x > 0); save({ adults: +f.adults.value || 1, children_coeffs: kids, plan_days: +f.days.value || 7,
        weekly_budget: f.budget.value === '' ? null : +f.budget.value, no_repeat_days: +f.rep.value || 0,
-       shopping_locked_only: f.lockedOnly.checked, meals, busy_slots: busy }); } }, 'Enregistrer')),
+       shopping_locked_only: f.lockedOnly.checked, meals, busy_slots: busy, fish_days: [...fish] }); } }, 'Enregistrer')),
     h('h2', { style: 'margin-top:1.2rem' }, 'Ingrédients refusés'), refList,
     h('form', { class: 'row', onsubmit: guard(async ev => { ev.preventDefault(); if (!newRef.value.trim()) return; const r = await post('/refused', { name: newRef.value }); newRef.value = ''; drawRef([...new Set([...(await api('/refused'))])]); }) }, newRef, h('button', { type: 'submit' }, 'Ajouter')),
     h('h2', { style: 'margin-top:1.2rem' }, 'Stock à la maison'), stockList,
