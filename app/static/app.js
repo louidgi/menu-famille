@@ -402,7 +402,7 @@ async function viewSettings() {
     h('h2', {}, 'Famille'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Adultes'), f.adults), h('div', {}, h('label', {}, 'Enfants (part d\'adulte)'), f.kids)),
     h('p', { class: 'small muted' }, 'Ex. 0.5, 0.6, 0.7 pour des enfants de 3, 4 et 7 ans : 0,5 = la moitié d\'une portion d\'adulte.'),
     h('h2', { style: 'margin-top:1.2rem' }, 'Planning'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Jours affichés'), f.days), h('div', {}, h('label', {}, 'Budget par semaine (€)'), f.budget)),
-    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep, h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'), h('label', {}, 'Repas à planifier'), matrix, h('label', {}, 'Repas chargés (recettes rapides)'), busyBox, h('label', {}, 'Jours poisson (recettes au poisson par défaut)'), fishBox,
+    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep, h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'), h('label', {}, 'Repas à planifier'), matrix, h('label', {}, 'Repas chargés (recettes rapides)'), busyBox, h('label', {}, 'Jours de recette avec du poisson par défaut'), fishBox,
     h('p', {}, h('button', { class: 'primary', onclick: () => { const kids = f.kids.value.split(/[,;\s]+/).map(x => parseFloat(x.replace(',', '.'))).filter(x => x > 0); save({ adults: +f.adults.value || 1, children_coeffs: kids, plan_days: +f.days.value || 7,
        weekly_budget: f.budget.value === '' ? null : +f.budget.value, no_repeat_days: +f.rep.value || 0,
        shopping_locked_only: f.lockedOnly.checked, meals, busy_slots: busy, fish_days: [...fish] }); } }, 'Enregistrer')),

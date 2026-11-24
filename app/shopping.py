@@ -164,15 +164,19 @@ def apply_ops(conn, ops: list[dict]) -> dict:
         qty = float(op.get("qty") or 0)
         if kind == "buy":
             add_stock(conn, name, max(0.0, qty))
-            conn.execute("UPDATE shop_state SET checked_on=?, forced=0, archived_need=NULL WHERE ingredient=?", (today, name))
+            conn.execute("UPDATE shop_state SET bought_qty = CASE WHEN checked_on=? THEN COALESCE(bought_qty,0)+? ELSE ? END, "
+                         "checked_on=?, forced=0, archived_need=NULL WHERE ingredient=?",
+                         (today, max(0.0, qty), max(0.0, qty), today, name))
         elif kind == "unbuy":
-            add_stock(conn, name, -max(0.0, qty))
-            conn.execute("UPDATE shop_state SET checked_on=NULL WHERE ingredient=?", (name,))
+            row = conn.execute("SELECT bought_qty FROM shop_state WHERE ingredient=?", (name,)).fetchone()
+            amount = row["bought_qty"] if row and row["bought_qty"] is not None else max(0.0, qty)  # repli : ancien comportement
+            add_stock(conn, name, -amount)
+            conn.execute("UPDATE shop_state SET checked_on=NULL, bought_qty=NULL WHERE ingredient=?", (name,))
         elif kind == "have":  # « déjà à la maison » : le stock couvre le besoin, sans achat
             need, _ = needs(conn)
             have = conn.execute("SELECT qty FROM stock WHERE ingredient=?", (name,)).fetchone()
             add_stock(conn, name, max(0.0, need.get(name, 0) - (have["qty"] if have else 0)))
-            conn.execute("UPDATE shop_state SET checked_on=?, forced=0 WHERE ingredient=?", (today, name))
+            conn.execute("UPDATE shop_state SET checked_on=?, forced=0, bought_qty=0 WHERE ingredient=?", (today, name))
         elif kind == "archive":
             need, _ = needs(conn)
             conn.execute("UPDATE shop_state SET archived_need=?, forced=0 WHERE ingredient=?", (need.get(name, 0.0), name))

@@ -251,3 +251,22 @@ def test_courses_indiquent_les_recettes_concernees(conn, rng):
     for it in SH.compute_list(conn)["items"]:          # chaque lien désigne bien une recette qui contient l'ingrédient
         for u in it["uses"]:
             assert it["ingredient"] in {i["ingredient"] for i in R.recipe_ingredients(conn, u["id"])}
+
+def test_annuler_un_achat_restitue_exactement_le_stock(conn, rng):
+    PS.ensure_plan(conn, 7, rng=rng)
+    stock = lambda: (conn.execute("SELECT qty FROM stock WHERE ingredient='lait'").fetchone() or {"qty": 0})["qty"]
+    base = stock()
+    item = next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "lait")
+    SH.apply_ops(conn, [{"op_id": "b1", "type": "buy", "ingredient": "lait", "qty": item["buy_qty"]}])
+    assert stock() > base
+    # le client envoie ici volontairement une quantité fausse (le besoin) : le serveur doit l'ignorer
+    SH.apply_ops(conn, [{"op_id": "u1", "type": "unbuy", "ingredient": "lait", "qty": item["required"]}])
+    assert stock() == pytest.approx(base)
+    lait = next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "lait")
+    assert lait["status"] == "todo"
+
+def test_annuler_un_achat_en_autre_quantite(conn, rng):
+    PS.ensure_plan(conn, 7, rng=rng)
+    SH.apply_ops(conn, [{"op_id": "b2", "type": "buy", "ingredient": "lait", "qty": 7777}])
+    SH.apply_ops(conn, [{"op_id": "u2", "type": "unbuy", "ingredient": "lait", "qty": 1}])
+    assert conn.execute("SELECT qty FROM stock WHERE ingredient='lait'").fetchone()["qty"] == pytest.approx(0)
