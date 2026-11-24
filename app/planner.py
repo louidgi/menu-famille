@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Génération de menus : fonctions pures (pas de base de données), testables avec une graine aléatoire.
-Glouton chronologique avec contraintes dures (type de repas, aliments refusés, répétitions) et score
+Glouton chronologique avec contraintes dures (type de repas, aliments refusés, répétitions, jours poisson) et score
 souple (variété des protéines et féculents, poisson, légumineuses/végétarien, jours chargés, saison, coût, notes, stock).
 On répète N tirages aléatoires et on garde le meilleur (budget compris)."""
 import random
@@ -38,13 +38,20 @@ def _near(ctx, day: date, span: int):
     return [c for (d, _, c) in ctx if abs((d - day).days) <= span]
 
 
-def _score(c: Cand, slot: Slot, ctx, busy, in_stock, w_cost=0.25) -> float:
+def _next_to_fish_day(day: date, fish_days) -> bool:
+    """Veille ou lendemain d'un jour poisson (sans en être un) : on évite d'y mettre du poisson,
+    sinon le glouton « consomme » le poisson la veille et le jour poisson doit répéter."""
+    wd = day.weekday()
+    return wd not in fish_days and ((wd + 1) % 7 in fish_days or (wd - 1) % 7 in fish_days)
+
+
+def _score(c: Cand, slot: Slot, ctx, busy, in_stock, w_cost=0.25, fish_days=frozenset()) -> float:
     day = slot[0]
     s = 0.6 * c.rating + (1.0 if c.favorite else 0.0) - w_cost * c.cost
     before = [(d, i, x) for (d, i, x) in ctx if (d.toordinal(), i) < _k(slot)]
     after = [(d, i, x) for (d, i, x) in ctx if (d.toordinal(), i) > _k(slot)]
     for nb in ([max(before, key=lambda t: (t[0].toordinal(), t[1]))[2]] if before else []) + \
-              ([min(after, key=lambda t: (t[0].toordinal(), t[1]))[2]] if after else []):
+    ([min(after, key=lambda t: (t[0].toordinal(), t[1]))[2]] if after else []):
         if nb.protein == c.protein and c.protein != "autre":
             s -= 3.0
         if nb.carb == c.carb and c.carb != "autre":
@@ -53,6 +60,8 @@ def _score(c: Cand, slot: Slot, ctx, busy, in_stock, w_cost=0.25) -> float:
     fish = sum(1 for x in win if x.protein == "poisson")
     if c.protein == "poisson":
         s += 1.5 if fish == 0 else (-3.0 if fish >= 2 else 0.0)
+        if _next_to_fish_day(day, fish_days):
+            s -= 2.0
     if c.protein == "veggie" and not any(x.protein == "veggie" for x in win):
         s += 1.0
     if c.protein in RED_MEAT and sum(1 for x in win if x.protein in RED_MEAT) >= 2:
@@ -66,9 +75,13 @@ def _score(c: Cand, slot: Slot, ctx, busy, in_stock, w_cost=0.25) -> float:
 
 
 def generate(slots, cands, fixed, recent, refused, busy, *, in_stock=frozenset(), budget=None,
-             max_cost=None, avoid_ids=frozenset(), no_repeat_days=21, rng=None, tries=25):
+             max_cost=None, avoid_ids=frozenset(), no_repeat_days=21, rng=None, tries=25,
+             fish_days=frozenset(), no_fish=False):
     """slots : [(date, slot)] à remplir ; fixed : {(date, slot): Cand} repas conservés ;
-    recent : [(date, Cand)] historique ; busy : jours de semaine chargés ; budget : plafond total sur ces repas.
+recent : [(date, Cand)] historique ; busy : {(jour_de_semaine, 'lunch'|'dinner')} repas chargés ;
+budget : plafond total sur ces repas ; fish_days : jours de semaine (0 = lundi) où l'on ne propose que du
+poisson (s'il n'y en a aucun d'utilisable, on retombe sur n'importe quelle recette plutôt que de laisser vide) ;
+no_fish : exclut le poisson (remplacement explicitement demandé « sans poisson »).
     Retourne {(date, slot): Cand | None}."""
     rng = rng or random.Random()
     slots = sorted(slots, key=_k)
@@ -82,6 +95,10 @@ def generate(slots, cands, fixed, recent, refused, busy, *, in_stock=frozenset()
         for slot in slots:
             kind = "d" if slot[1] == "dinner" else "l"
             pool = [c for c in usable if kind in c.meals]
+            if no_fish:
+                pool = [c for c in pool if c.protein != "poisson"]
+            elif slot[0].weekday() in fish_days:
+                pool = [c for c in pool if c.protein == "poisson"] or pool
             for window in (no_repeat_days, 7, 0):   # on assouplit les répétitions si le choix est trop mince
                 used = {x.id for (d, _, x) in ctx if abs((d - slot[0]).days) < window} if window else set()
                 ok = [c for c in pool if c.id not in used]
@@ -90,7 +107,7 @@ def generate(slots, cands, fixed, recent, refused, busy, *, in_stock=frozenset()
             if not ok:
                 out[slot] = None
                 continue
-            scored = [(_score(c, slot, ctx, busy, in_stock) + rng.uniform(0, 1.2), c) for c in ok]
+            scored = [(_score(c, slot, ctx, busy, in_stock, fish_days=fish_days) + rng.uniform(0, 1.2), c) for c in ok]
             sc, pick = max(scored, key=lambda t: t[0])
             out[slot] = pick
             ctx.append((slot[0], SLOT_IDX[slot[1]], pick))
