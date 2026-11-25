@@ -473,7 +473,7 @@ async function setPlanning() {
     h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'),
     h('label', {}, 'Repas à planifier'), matrix('', 'Déjeuner', 'Dîner', i => meals[i], (i, k, v) => { meals[i][k] = v; }),
     h('label', {}, 'Repas chargés (recettes rapides)'), matrix('', 'Midi', 'Soir', i => busy[i] || {}, (i, k, v) => { (busy[i] ||= {})[k] = v; }),
-    h('label', {}, 'Jours poisson (recettes au poisson par défaut)'), fishBox],
+    h('label', {}, 'Jours avec des recettes au poisson par défaut'), fishBox],
   async () => {
     await api('/settings', { method: 'PUT', body: { plan_days: +f.days.value || 7, weekly_budget: f.budget.value === '' ? null : +f.budget.value,
       no_repeat_days: +f.rep.value || 0, shopping_locked_only: f.lockedOnly.checked, meals, busy_slots: busy, fish_days: [...fish] } });
