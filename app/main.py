@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """API FastAPI + service des fichiers statiques de la PWA."""
-import asyncio, json, logging, os, shutil, sqlite3, tempfile
+import asyncio, json, logging, os, shutil, sqlite3, tempfile, math
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -132,6 +132,7 @@ class Replace(BaseModel):
     reason: str
     ingredient: str | None = None
     regenerate_following: bool = True
+    allow_non_fish: bool = False
 
 
 class Following(BaseModel):
@@ -164,7 +165,8 @@ def plan_add(body: Slot, conn=db_dep):
 
 @api.post("/plan/{pid}/replace")
 def plan_replace(pid: int, body: Replace, conn=db_dep):
-    return _plan_call(PS.replace_meal, conn, pid, body.reason, body.ingredient, body.regenerate_following)
+    return _plan_call(PS.replace_meal, conn, pid, body.reason, body.ingredient, body.regenerate_following,
+                      allow_non_fish=body.allow_non_fish)
 
 
 @api.post("/plan/{pid}/skip")
@@ -294,17 +296,46 @@ def refused_del(name: str, conn=db_dep):
     return {"ok": True}
 
 
+def _unit_kind(u: str | None):
+    unit = I.UNIT_SYN.get((u or "").strip().lower())
+    return unit, ("g" if unit in I.MASS else "ml" if unit in I.VOL else "piece")
+
+
 @api.get("/ingredients")
 def ingredients_list(conn=db_dep):
-    return [dict(r) for r in conn.execute("SELECT * FROM ingredients ORDER BY verified, aisle, name")]
+    return [dict(r) for r in conn.execute(
+                "SELECT i.*, (SELECT COUNT(*) FROM recipe_ingredients ri WHERE ri.ingredient=i.name) AS n_recipes "
+                "FROM ingredients i ORDER BY i.verified, i.aisle, i.name")]
 
 
 EDITABLE = {"aisle", "price", "pack_qty", "pack_label", "is_basic", "is_recurrent", "weekly_qty", "verified"}
 
 
+def _clean_field(k, v):
+    if k in ("price", "pack_qty", "weekly_qty"):
+        if v in (None, ""):
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"{k} : nombre attendu")
+        if not math.isfinite(f) or f < 0:
+            raise HTTPException(400, f"{k} : valeur invalide")
+        return None if (k == "pack_qty" and f == 0) else f
+    if k in ("is_basic", "is_recurrent", "verified"):
+        return int(bool(v))
+    if k == "aisle":
+        if v not in SH.AISLES:
+            raise HTTPException(400, "Rayon inconnu")
+        return v
+    if k == "pack_label":
+        return (str(v).strip()[:60] or None) if v is not None else None
+    return v
+
+
 @api.put("/ingredients/{name}")
 def ingredient_update(name: str, body: dict[str, Any], conn=db_dep):
-    sets = {k: v for k, v in body.items() if k in EDITABLE}
+    sets = {k: _clean_field(k, v) for k, v in body.items() if k in EDITABLE}
     if not sets or not conn.execute("SELECT 1 FROM ingredients WHERE name=?", (name,)).fetchone():
         raise HTTPException(400, "Rien à modifier")
     conn.execute(f"UPDATE ingredients SET {','.join(k + '=?' for k in sets)} WHERE name=?", (*sets.values(), name))
@@ -312,12 +343,47 @@ def ingredient_update(name: str, body: dict[str, Any], conn=db_dep):
     return {"ok": True}
 
 
+@api.delete("/ingredients/{name}")
+def ingredient_delete(name: str, conn=db_dep):
+    if not conn.execute("SELECT 1 FROM ingredients WHERE name=?", (name,)).fetchone():
+        raise HTTPException(404, "Ingrédient inconnu")
+    if name in I.seed_names():
+        raise HTTPException(400, "Ingrédient du catalogue de départ : il serait recréé au prochain démarrage.")
+    if conn.execute("SELECT 1 FROM recipe_ingredients WHERE ingredient=? LIMIT 1", (name,)).fetchone():
+        raise HTTPException(400, "Cet ingrédient est utilisé par des recettes (même archivées).")
+    for t in ("stock", "shop_state", "purchases"):
+        conn.execute(f"DELETE FROM {t} WHERE ingredient=?", (name,))
+    conn.execute("DELETE FROM ingredients WHERE name=?", (name,))
+    conn.commit()
+    return {"ok": True}
+
+
 @api.get("/stock")
 def stock_list(conn=db_dep):
     SH.process_past(conn)
-    return [dict(r) for r in conn.execute(
+    rows = conn.execute(
         "SELECT s.ingredient, s.qty, i.kind, i.aisle, i.is_recurrent, i.is_basic FROM stock s "
-        "JOIN ingredients i ON i.name=s.ingredient WHERE s.qty>0 ORDER BY i.aisle, s.ingredient")]
+        "JOIN ingredients i ON i.name=s.ingredient WHERE s.qty>0 ORDER BY i.aisle, s.ingredient").fetchall()
+    return [{**dict(r), "text": R.fmt_qty(r["qty"], r["kind"])} for r in rows]
+
+
+class StockIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    qty: float = Field(ge=0)
+    unit: str | None = None
+
+
+@api.post("/stock")
+def stock_add(body: StockIn, conn=db_dep):
+    """Ajoute une quantité au stock (article du catalogue, ou nouvel article « à vérifier »)."""
+    cat = catalog(conn)
+    unit, kind = _unit_kind(body.unit)
+    name = I.find_or_create(conn, cat, body.name, kind)
+    if not name:
+        raise HTTPException(400, "Nom vide")
+    SH.add_stock(conn, name, I.to_base(body.qty, unit, cat.rows[name]) or 0.0)
+    conn.commit()
+    return {"name": name}
 
 
 @api.put("/stock/{name}")
@@ -328,6 +394,37 @@ def stock_set(name: str, body: dict[str, float], conn=db_dep):
     conn.commit()
     return {"ok": True}
 
+
+class RecIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    weekly_qty: float = Field(gt=0)
+    unit: str | None = None
+
+
+@api.get("/recurrents")
+def recurrents_list(conn=db_dep):
+    return [{**dict(r), "estimate": SH.estimate_weekly(conn, r["name"])} for r in conn.execute(
+                "SELECT name, kind, weekly_qty FROM ingredients WHERE is_recurrent=1 ORDER BY name").fetchall()]
+
+
+@api.post("/recurrents")
+def recurrent_add(body: RecIn, conn=db_dep):
+    cat = catalog(conn)
+    unit, kind = _unit_kind(body.unit)
+    name = I.find_or_create(conn, cat, body.name, kind)
+    if not name:
+        raise HTTPException(400, "Nom vide")
+    conn.execute("UPDATE ingredients SET is_recurrent=1, weekly_qty=? WHERE name=?",
+                 (I.to_base(body.weekly_qty, unit, cat.rows[name]), name))
+    conn.commit()
+    return {"name": name}
+
+
+@api.delete("/recurrents/{name}")
+def recurrent_del(name: str, conn=db_dep):
+    conn.execute("UPDATE ingredients SET is_recurrent=0, weekly_qty=NULL WHERE name=?", (name,))
+    conn.commit()
+    return {"ok": True}
 
 # ---------- courses ----------
 class Ops(BaseModel):

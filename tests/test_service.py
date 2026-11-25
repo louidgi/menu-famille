@@ -251,3 +251,44 @@ def test_courses_indiquent_les_recettes_concernees(conn, rng):
     for it in SH.compute_list(conn)["items"]:          # chaque lien désigne bien une recette qui contient l'ingrédient
         for u in it["uses"]:
             assert it["ingredient"] in {i["ingredient"] for i in R.recipe_ingredients(conn, u["id"])}
+
+def test_annuler_un_achat_restitue_exactement_le_stock(conn, rng):
+    PS.ensure_plan(conn, 7, rng=rng)
+    stock = lambda: (conn.execute("SELECT qty FROM stock WHERE ingredient='lait'").fetchone() or {"qty": 0})["qty"]
+    base = stock()
+    item = next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "lait")
+    SH.apply_ops(conn, [{"op_id": "b1", "type": "buy", "ingredient": "lait", "qty": item["buy_qty"]}])
+    assert stock() > base
+    # le client envoie ici volontairement une quantité fausse (le besoin) : le serveur doit l'ignorer
+    SH.apply_ops(conn, [{"op_id": "u1", "type": "unbuy", "ingredient": "lait", "qty": item["required"]}])
+    assert stock() == pytest.approx(base)
+    lait = next(i for i in SH.compute_list(conn)["items"] if i["ingredient"] == "lait")
+    assert lait["status"] == "todo"
+
+def test_annuler_un_achat_en_autre_quantite(conn, rng):
+    PS.ensure_plan(conn, 7, rng=rng)
+    SH.apply_ops(conn, [{"op_id": "b2", "type": "buy", "ingredient": "lait", "qty": 7777}])
+    SH.apply_ops(conn, [{"op_id": "u2", "type": "unbuy", "ingredient": "lait", "qty": 1}])
+    assert conn.execute("SELECT qty FROM stock WHERE ingredient='lait'").fetchone()["qty"] == pytest.approx(0)
+
+def test_achats_historises_annules_et_estimation(conn, clock):
+    for i in range(3):
+        SH.apply_ops(conn, [{"op_id": f"b{i}", "type": "buy", "ingredient": "lait", "qty": 1000}])
+        if i < 2:
+            clock.advance(14)
+    assert SH.estimate_weekly(conn, "lait")["weekly_qty"] == pytest.approx(500)   # 2000 consommés en 28 jours
+    SH.apply_ops(conn, [{"op_id": "u1", "type": "unbuy", "ingredient": "lait", "qty": 1000}])
+    assert SH.estimate_weekly(conn, "lait")["weekly_qty"] == pytest.approx(1000 / 14 * 7)   # dernier lot annulé : 1000 sur 14 j
+
+
+def test_estimation_impossible_sans_assez_d_achats(conn, clock):
+    assert SH.estimate_weekly(conn, "lait")["weekly_qty"] is None
+    SH.apply_ops(conn, [{"op_id": "e1", "type": "buy", "ingredient": "lait", "qty": 1000}])
+    clock.advance(3)
+    SH.apply_ops(conn, [{"op_id": "e2", "type": "buy", "ingredient": "lait", "qty": 1000}])
+    assert SH.estimate_weekly(conn, "lait")["weekly_qty"] is None     # moins de 7 jours d'écart
+
+
+def test_saisie_avec_quantite_en_tete_ne_cree_pas_d_ingredient_bizarre(conn):
+    cat = I.Catalog(conn.execute("SELECT * FROM ingredients").fetchall())
+    assert I.find_or_create(conn, cat, "10 yaourt") == "yaourt"

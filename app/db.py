@@ -43,7 +43,15 @@ CREATE TABLE shop_state (ingredient TEXT PRIMARY KEY REFERENCES ingredients(name
 CREATE TABLE ops (op_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
 """
 
-MIGRATIONS = [SCHEMA_V1]  # ajouter ici les migrations suivantes, jamais modifier les anciennes
+SCHEMA_V2 = "ALTER TABLE shop_state ADD COLUMN bought_qty REAL;"   # NULL = inconnu (achats d'avant la migration)
+
+SCHEMA_V3 = """
+CREATE TABLE purchases (id INTEGER PRIMARY KEY, ingredient TEXT NOT NULL REFERENCES ingredients(name),
+qty REAL NOT NULL, day TEXT NOT NULL);
+CREATE INDEX idx_purchases_ing ON purchases(ingredient, day);
+"""
+
+MIGRATIONS = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3] # ajouter ici les migrations suivantes, jamais modifier les anciennes
 
 
 def connect() -> sqlite3.Connection:

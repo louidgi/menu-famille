@@ -60,7 +60,7 @@ def enabled_slots(settings: dict, start: date, days: int) -> list[tuple]:
     return out
 
 
-def _fill(conn, slots, *, exclude_ids=(), max_cost=None, avoid_ids=frozenset(), rng=None):
+def _fill(conn, slots, *, exclude_ids=(), max_cost=None, avoid_ids=frozenset(), rng=None, no_fish=False):
     """Choisit une recette pour chaque créneau en tenant compte des repas conservés autour."""
     s = get_settings(conn)
     fam = family_eq(s)
@@ -75,7 +75,8 @@ def _fill(conn, slots, *, exclude_ids=(), max_cost=None, avoid_ids=frozenset(), 
         budget -= sum(c.cost for (d, sl), c in fixed.items() if lo <= d <= hi)
     return P.generate(slots, list(cands.values()), {k: v for k, v in fixed.items() if k not in set(slots)}, recent,
                       _refused(conn), busy_set(s), in_stock=_stock_names(conn), budget=budget,
-                      max_cost=max_cost, avoid_ids=avoid_ids, no_repeat_days=s["no_repeat_days"], rng=rng)
+                      max_cost=max_cost, avoid_ids=avoid_ids, no_repeat_days=s["no_repeat_days"], rng=rng,
+                      fish_days=frozenset(int(d) for d in s["fish_days"]), no_fish=no_fish)
 
 
 def ensure_plan(conn, days: int | None = None, rng=None) -> None:
@@ -130,7 +131,7 @@ def generate_all(conn, days: int | None = None, rng=None) -> None:
 
 
 def replace_meal(conn, plan_id: int, reason: str, ingredient: str | None = None,
-                 regenerate_following: bool = True, rng=None) -> dict:
+                 regenerate_following: bool = True, rng=None, allow_non_fish: bool = False) -> dict:
     r = _row(conn, plan_id)
     old_id = r["recipe_id"]
     max_cost = None
@@ -147,7 +148,7 @@ def replace_meal(conn, plan_id: int, reason: str, ingredient: str | None = None,
     elif reason != "other":
         raise PlanError("Motif inconnu")
     res = _fill(conn, [_key(r)], exclude_ids={r["id"]}, max_cost=max_cost,
-                avoid_ids=frozenset({old_id} if old_id else ()), rng=rng)
+                avoid_ids=frozenset({old_id} if old_id else ()), rng=rng, no_fish=allow_non_fish)
     new = res.get(_key(r))
     if new is None:
         raise PlanError("Aucune autre recette ne convient (aliments refusés, budget ou bibliothèque trop petite)")

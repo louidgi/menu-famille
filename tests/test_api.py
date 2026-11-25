@@ -113,3 +113,31 @@ def test_saisie_manuelle_recette(client):
                                               "ingredients": ["250 g de farine", "50 cl de lait", "3 oeufs"], "steps": ["Mélanger.", "Cuire."]}).json()["id"]
     ing = {i["ingredient"]: i for i in client.get(f"/api/recipes/{rid}").json()["ingredients"]}
     assert set(ing) == {"farine", "lait", "oeuf"}
+
+def test_stock_ajout_direct_unite_et_nouvel_article(client):
+    login(client)
+    assert client.post("/api/stock", json={"name": "Farine", "qty": 1.5, "unit": "kg"}).status_code == 200
+    assert client.post("/api/stock", json={"name": "Sirop", "qty": 2, "unit": "l"}).status_code == 200
+    s = {x["ingredient"]: x for x in client.get("/api/stock").json()}
+    assert s["farine"]["qty"] == pytest.approx(1500)
+    assert s["sirop"]["kind"] == "ml" and s["sirop"]["qty"] == pytest.approx(2000)
+
+
+def test_conditionnement_valide(client):
+    login(client)
+    assert client.put("/api/ingredients/lait", json={"pack_qty": 6000, "pack_label": "pack de 6 × 1 L", "price": 6.6}).status_code == 200
+    lait = next(i for i in client.get("/api/ingredients").json() if i["name"] == "lait")
+    assert lait["pack_qty"] == 6000 and lait["pack_label"] == "pack de 6 × 1 L"
+    assert client.put("/api/ingredients/lait", json={"pack_qty": -1}).status_code == 400
+    assert client.put("/api/ingredients/lait", json={"aisle": "Nimporte"}).status_code == 400
+
+
+def test_recurrents_ajout_retrait_et_suppression_d_ingredient(client):
+    login(client)
+    assert client.post("/api/recurrents", json={"name": "Blédine", "weekly_qty": 300, "unit": "g"}).status_code == 200
+    assert "blédine" in {r["name"] for r in client.get("/api/recurrents").json()}
+    client.delete("/api/recurrents/blédine")
+    assert "blédine" not in {r["name"] for r in client.get("/api/recurrents").json()}
+    assert client.delete("/api/ingredients/blédine").status_code == 200       # inutilisé, pas du catalogue de départ
+    assert client.delete("/api/ingredients/oignon").status_code == 400        # utilisé par des recettes
+    assert client.delete("/api/ingredients/papier toilette").status_code == 400   # catalogue de départ
