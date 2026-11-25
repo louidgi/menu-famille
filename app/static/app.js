@@ -42,7 +42,7 @@ async function api(path, opts = {}) {
   } catch { throw new Offline('Hors ligne'); }
   if (r.status === 401) { showLogin(); throw new Error('Non connecté'); }
   if (r.status === 503 && (opts.method || 'GET') === 'GET') throw new Offline('Hors ligne');
-  if (!r.ok) { let m = 'Erreur ' + r.status; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+   if (!r.ok) { let m = 'Erreur ' + r.status; try { const d = (await r.json()).detail; if (typeof d === 'string') m = d; } catch {} throw new Error(m); }
   return r.json();
 }
 const post = (p, body) => api(p, { method: 'POST', body: body || {} });
@@ -61,6 +61,7 @@ const closeBtn = (close, label = 'Annuler') => h('button', { type: 'button', onc
 let state = { settings: null, names: [] };
 async function route() {
   const hash = location.hash || '#/menus';
+  curHash = hash; dirty = false; document.body.classList.remove('sb');
   const [, tab, arg] = hash.split('/');
   document.querySelectorAll('#tabs a').forEach(a => a.toggleAttribute('aria-current', a.dataset.tab === (tab === 'recette' ? 'recettes' : tab)) || a.removeAttribute('aria-current'));
   document.querySelectorAll('#tabs a').forEach(a => { if (a.dataset.tab === (tab === 'recette' ? 'recettes' : tab)) a.setAttribute('aria-current', 'page'); });
@@ -76,7 +77,12 @@ async function route() {
   }
   window.scrollTo(0, 0);
 }
-window.addEventListener('hashchange', route);
+let curHash = '', dirty = false, reverting = false;
+window.addEventListener('hashchange', () => {
+  if (reverting) { reverting = false; return; }
+  if (dirty && !confirm('Des modifications ne sont pas enregistrées. Quitter quand même ?')) { reverting = true; location.hash = curHash; return; }
+  route();
+});
 const refresh = () => route();
 
 // ---------- connexion ----------
@@ -373,58 +379,232 @@ window.addEventListener('online', () => { flush().then(() => { drawShop(); }); }
 window.addEventListener('offline', drawShop);
 
 // ---------- réglages ----------
-async function viewSettings() {
-  const [s, refused, ings, stock] = await Promise.all([api('/settings'), api('/refused'), api('/ingredients'), api('/stock')]);
-  const save = guard(async patch => { await api('/settings', { method: 'PUT', body: patch }); toast('Enregistré'); });
-  const meals = JSON.parse(JSON.stringify(s.meals)), busy = JSON.parse(JSON.stringify(s.busy_slots));
+// ---------- réglages (sous-pages) ----------
+const AISLES = ['Fruits et légumes', 'Boucherie', 'Poissonnerie', 'Crèmerie', 'Boulangerie', 'Épicerie', 'Conserves', 'Surgelés', 'Boissons', 'Hygiène et maison', 'Divers'];
+// [libellé, facteur vers l'unité de base, code envoyé au serveur]
+const UNITS = { g: [['g', 1, 'g'], ['kg', 1000, 'kg']], ml: [['ml', 1, 'ml'], ['cl', 10, 'cl'], ['L', 1000, 'l']], piece: [['pièce(s)', 1, 'piece']] };
+const ALL_UNITS = [...UNITS.g, ...UNITS.ml, ...UNITS.piece];
+const fmtBase = (q, kind) => {
+  const n = (x, d = 2) => x.toLocaleString('fr-FR', { maximumFractionDigits: d });
+  if (kind === 'g') return q >= 1000 ? n(q / 1000) + ' kg' : n(Math.round(q), 0) + ' g';
+  if (kind === 'ml') return q >= 1000 ? n(q / 1000) + ' L' : n(Math.round(q), 0) + ' ml';
+  return n(q, 1) + (q === 1 ? ' pièce' : ' pièces');
+};
+// Champ quantité + unité adaptés au type de l'ingrédient ; get() renvoie la quantité en unité de base.
+function qtyField(kind, base, label) {
+  const us = UNITS[kind] || UNITS.piece;
+  let idx = 0;
+  if (base != null) us.forEach(([, f], i) => { if (base >= f && f >= us[idx][1]) idx = i; });
+  const num = h('input', { type: 'number', min: 0, step: 'any', inputmode: 'decimal', 'aria-label': label, value: base == null ? '' : +(base / us[idx][1]).toFixed(2) });
+  const sel = h('select', { 'aria-label': 'Unité : ' + label }, us.map(([l], i) => h('option', { value: i, selected: i === idx }, l)));
+  return { el: h('span', { class: 'qty grow' }, num, sel), num, sel, get: () => num.value === '' ? null : +num.value * us[+sel.value][1] };
+}
+const unitSelect = kind => h('select', { 'aria-label': 'Unité' }, ALL_UNITS.map(([l, , c]) =>
+  h('option', { value: c, selected: c === (kind === 'ml' ? 'ml' : kind === 'piece' ? 'piece' : 'g') }, l)));
+
+// Page à formulaire : barre « Enregistrer » fixe, active seulement s'il y a des modifications.
+function formPage(content, onSave) {
+  const status = h('span', { class: 'small' });
+  const btn = h('button', { class: 'primary', disabled: true }, 'Enregistrer');
+  const wrap = h('div', {}, content);
+  const mark = () => { dirty = true; btn.disabled = false; status.textContent = 'Modifications non enregistrées'; };
+  wrap.addEventListener('input', mark); wrap.addEventListener('change', mark);
+  btn.onclick = guard(async () => { await onSave(); dirty = false; btn.disabled = true; status.textContent = ''; });
+  document.body.classList.add('sb');
+  return [wrap, h('div', { class: 'savebar' }, status, btn)];
+}
+function addForm(qtyLabel, names, onSubmit) {
+  const name = h('input', { list: 'ingnames2', placeholder: 'Article (ex. farine, blédine…)', 'aria-label': 'Article', required: true });
+  const qty = h('input', { type: 'number', min: 0, step: 'any', inputmode: 'decimal', placeholder: qtyLabel, 'aria-label': qtyLabel, required: true });
+  const unit = unitSelect('g');
+  return h('form', { class: 'addform', onsubmit: guard(async ev => { ev.preventDefault(); await onSubmit({ name: name.value.trim(), qty: +qty.value, unit: unit.value }); }) },
+    h('datalist', { id: 'ingnames2' }, names.map(n => h('option', { value: n }))), name, qty, unit, h('button', { class: 'primary', type: 'submit' }, 'Ajouter'));
+}
+
+const SETTINGS_PAGES = [
+  ['famille', 'Famille', 'Adultes, enfants, portions'],
+  ['planning', 'Planning', 'Repas à planifier, budget, jours chargés, poisson'],
+  ['stock', 'Stock à la maison', 'Quantités, ajout direct'],
+  ['recurrents', 'Produits récurrents', 'Petit-déjeuner, consommation estimée'],
+  ['catalogue', 'Catalogue d\'ingrédients', 'Conditionnements, prix, rayons, à vérifier'],
+  ['refuses', 'Ingrédients refusés', 'Exclus de tous les menus'],
+  ['donnees', 'Données et compte', 'Sauvegarde, déconnexion'],
+];
+async function viewSettings(page) {
+  const v = { famille: setFamily, planning: setPlanning, stock: setStock, recurrents: setRecurrents, catalogue: setCatalog, refuses: setRefused, donnees: setData }[page];
+  if (!v) return settingsHub();
+  return [h('p', {}, h('a', { href: '#/reglages' }, '← Réglages')), await v()];
+}
+async function settingsHub() {
+  const nv = (await api('/ingredients').catch(() => [])).filter(i => !i.verified).length;
+  return [h('h1', {}, 'Réglages'), h('div', { class: 'navlist' }, SETTINGS_PAGES.map(([k, t, d]) =>
+    h('a', { class: 'navrow', href: '#/reglages/' + k }, h('span', { class: 'grow' }, h('strong', {}, t), h('span', { class: 'small muted blk' }, d)),
+      k === 'catalogue' && nv ? h('span', { class: 'badge' }, nv + ' à vérifier') : null, h('span', { class: 'muted', 'aria-hidden': 'true' }, '›'))))];
+}
+
+async function setFamily() {
+  const s = await api('/settings');
+  const f = { adults: h('input', { type: 'number', min: 1, value: s.adults }), kids: h('input', { value: s.children_coeffs.join(', ') }) };
+  return [h('h1', {}, 'Famille'), ...formPage([
+    h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Adultes'), f.adults), h('div', {}, h('label', {}, 'Enfants (part d\'adulte)'), f.kids)),
+    h('p', { class: 'small muted' }, 'Ex. 0.5, 0.6, 0.7 pour des enfants de 3, 4 et 7 ans : 0,5 = la moitié d\'une portion d\'adulte.')],
+  async () => {
+    const kids = f.kids.value.split(/[;\s]+|,(?!\d)/).map(x => parseFloat(x.replace(',', '.'))).filter(x => x > 0);
+    await api('/settings', { method: 'PUT', body: { adults: +f.adults.value || 1, children_coeffs: kids } }); toast('Enregistré');
+  })];
+}
+
+async function setPlanning() {
+  const s = await api('/settings');
+  const meals = JSON.parse(JSON.stringify(s.meals)), busy = JSON.parse(JSON.stringify(s.busy_slots)), fish = new Set(s.fish_days);
   const f = {
-    adults: h('input', { type: 'number', min: 1, value: s.adults }), kids: h('input', { value: s.children_coeffs.join(', ') }),
     days: h('input', { type: 'number', min: 1, max: 21, value: s.plan_days }), budget: h('input', { type: 'number', min: 0, step: 5, value: s.weekly_budget ?? '', placeholder: 'Aucun' }),
-    rep: h('input', { type: 'number', min: 0, value: s.no_repeat_days }),
-    lockedOnly: h('input', { type: 'checkbox', checked: s.shopping_locked_only }),
+    rep: h('input', { type: 'number', min: 0, value: s.no_repeat_days }), lockedOnly: h('input', { type: 'checkbox', checked: s.shopping_locked_only }),
   };
-  const matrix = h('div', { class: 'matrix' }, h('span'), h('strong', {}, 'Déjeuner'), h('strong', {}, 'Dîner'),
-    DAYS.map((n, i) => [h('span', {}, n), h('input', { type: 'checkbox', checked: meals[i].lunch, 'aria-label': n + ' déjeuner', onchange: e => { meals[i].lunch = e.target.checked; } }), h('input', { type: 'checkbox', checked: meals[i].dinner, 'aria-label': n + ' dîner', onchange: e => { meals[i].dinner = e.target.checked; } })]));
-  const busyBox = h('div', { class: 'matrix' }, h('span'), h('strong', {}, 'Midi'), h('strong', {}, 'Soir'), DAYS.map((n, i) => [h('span', {}, n),
-    h('input', { type: 'checkbox', checked: !!busy[i]?.lunch, 'aria-label': n + ' midi chargé', onchange: e => { (busy[i] ||= {}).lunch = e.target.checked; } }),
-    h('input', { type: 'checkbox', checked: !!busy[i]?.dinner, 'aria-label': n + ' soir chargé', onchange: e => { (busy[i] ||= {}).dinner = e.target.checked; } })]));const refList = h('div', {});
-  const fish = new Set(s.fish_days);
+  const matrix = (title, a, b, get, set) => h('div', { class: 'matrix' }, h('span'), h('strong', {}, a), h('strong', {}, b),
+    DAYS.map((n, i) => [h('span', {}, n),
+      h('input', { type: 'checkbox', checked: !!get(i).lunch, 'aria-label': `${n} ${a}`, onchange: e => set(i, 'lunch', e.target.checked) }),
+      h('input', { type: 'checkbox', checked: !!get(i).dinner, 'aria-label': `${n} ${b}`, onchange: e => set(i, 'dinner', e.target.checked) })]));
   const fishBox = h('div', { class: 'row', style: 'flex-wrap:wrap' }, DAYS.map((n, i) => h('label', { class: 'inline' },
     h('input', { type: 'checkbox', checked: fish.has(i), 'aria-label': n + ' : poisson', onchange: e => e.target.checked ? fish.add(i) : fish.delete(i) }), n.slice(0, 3))));
-  const drawRef = list => refList.replaceChildren(...(list.length ? list.map(n => h('span', { class: 'tag', style: 'margin:.2rem' }, n, ' ', h('button', { class: 'link', 'aria-label': 'Retirer ' + n, onclick: guard(async () => { await api('/refused/' + encodeURIComponent(n), { method: 'DELETE' }); drawRef(list.filter(x => x !== n)); }) }, '×'))) : [h('span', { class: 'muted small' }, 'Aucun pour le moment')]));
-  drawRef(refused);
-  const newRef = h('input', { placeholder: 'Ajouter un ingrédient refusé' });
-  const unverified = ings.filter(i => !i.verified);
-  const stockList = h('div', {}, stock.length ? stock.map(x => h('div', { class: 'item' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, x.ingredient), h('div', { class: 'small muted' }, `${Math.round(x.qty)} ${x.kind === 'piece' ? '' : x.kind}`)),
-    h('button', { onclick: guard(async () => { await api('/stock/' + encodeURIComponent(x.ingredient), { method: 'PUT', body: { qty: 0 } }); toast('Retiré du stock'); refresh(); }) }, 'Vide'))) : h('p', { class: 'muted small' }, 'Le stock se remplit avec vos achats (surplus) et se vide avec les repas.'));
-  const recurrent = ings.filter(i => i.is_recurrent);
-  return [h('h1', {}, 'Réglages'),
-    h('h2', {}, 'Famille'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Adultes'), f.adults), h('div', {}, h('label', {}, 'Enfants (part d\'adulte)'), f.kids)),
-    h('p', { class: 'small muted' }, 'Ex. 0.5, 0.6, 0.7 pour des enfants de 3, 4 et 7 ans : 0,5 = la moitié d\'une portion d\'adulte.'),
-    h('h2', { style: 'margin-top:1.2rem' }, 'Planning'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Jours affichés'), f.days), h('div', {}, h('label', {}, 'Budget par semaine (€)'), f.budget)),
-    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep, h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'), h('label', {}, 'Repas à planifier'), matrix, h('label', {}, 'Repas chargés (recettes rapides)'), busyBox, h('label', {}, 'Jours de recette avec du poisson par défaut'), fishBox,
-    h('p', {}, h('button', { class: 'primary', onclick: () => { const kids = f.kids.value.split(/[,;\s]+/).map(x => parseFloat(x.replace(',', '.'))).filter(x => x > 0); save({ adults: +f.adults.value || 1, children_coeffs: kids, plan_days: +f.days.value || 7,
-       weekly_budget: f.budget.value === '' ? null : +f.budget.value, no_repeat_days: +f.rep.value || 0,
-       shopping_locked_only: f.lockedOnly.checked, meals, busy_slots: busy, fish_days: [...fish] }); } }, 'Enregistrer')),
-    h('h2', { style: 'margin-top:1.2rem' }, 'Ingrédients refusés'), refList,
-    h('form', { class: 'row', onsubmit: guard(async ev => { ev.preventDefault(); if (!newRef.value.trim()) return; const r = await post('/refused', { name: newRef.value }); newRef.value = ''; drawRef([...new Set([...(await api('/refused'))])]); }) }, newRef, h('button', { type: 'submit' }, 'Ajouter')),
-    h('h2', { style: 'margin-top:1.2rem' }, 'Stock à la maison'), stockList,
-    h('p', { class: 'small muted' }, 'Pour les produits de base (sel, huile…), ajoutez-les à la liste de courses avec « Ajouter un article » quand il en reste peu.'),
-    h('h2', { style: 'margin-top:1.2rem' }, 'Petit-déjeuner et produits récurrents'),
-    h('p', { class: 'small muted' }, 'Consommation estimée par semaine ; le stock baisse chaque jour et l\'article revient dans la liste quand il manque.'),
-    recurrent.map(i => recurrentRow(i)),
-    unverified.length ? [h('h2', { style: 'margin-top:1.2rem' }, `Ingrédients à vérifier (${unverified.length})`), h('p', { class: 'small muted' }, 'Reconnus par défaut comme « divers ». Choisissez le rayon pour une liste de courses bien classée.'), unverified.map(i => verifyRow(i))] : null,
-    h('h2', { style: 'margin-top:1.2rem' }, 'Données'), h('p', {}, h('a', { class: 'btn', href: '/api/backup', style: 'display:inline-block;text-decoration:none;padding:.7rem 1rem;border:1px solid var(--line);border-radius:8px' }, 'Télécharger une sauvegarde'), ' ', h('button', { onclick: guard(async () => { await post('/logout'); navigator.serviceWorker?.controller?.postMessage('clear'); localStorage.removeItem(LS.shop); localStorage.removeItem(LS.queue); shop = null; showLogin(); }) }, 'Se déconnecter'))];
+  return [h('h1', {}, 'Planning'), ...formPage([
+    h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Jours affichés'), f.days), h('div', {}, h('label', {}, 'Budget par semaine (€)'), f.budget)),
+    h('label', {}, 'Ne pas répéter une recette avant (jours)'), f.rep,
+    h('label', { class: 'inline' }, f.lockedOnly, 'Courses : seulement les repas verrouillés'),
+    h('label', {}, 'Repas à planifier'), matrix('', 'Déjeuner', 'Dîner', i => meals[i], (i, k, v) => { meals[i][k] = v; }),
+    h('label', {}, 'Repas chargés (recettes rapides)'), matrix('', 'Midi', 'Soir', i => busy[i] || {}, (i, k, v) => { (busy[i] ||= {})[k] = v; }),
+    h('label', {}, 'Jours poisson (recettes au poisson par défaut)'), fishBox],
+  async () => {
+    await api('/settings', { method: 'PUT', body: { plan_days: +f.days.value || 7, weekly_budget: f.budget.value === '' ? null : +f.budget.value,
+      no_repeat_days: +f.rep.value || 0, shopping_locked_only: f.lockedOnly.checked, meals, busy_slots: busy, fish_days: [...fish] } });
+    toast('Enregistré');
+  })];
 }
-function recurrentRow(i) {
-  const q = h('input', { type: 'number', min: 0, value: i.weekly_qty ?? '', 'aria-label': 'Quantité par semaine pour ' + i.name });
-  return h('div', { class: 'line' }, h('strong', {}, i.name), q, h('button', { onclick: guard(async () => { await api('/ingredients/' + encodeURIComponent(i.name), { method: 'PUT', body: { weekly_qty: +q.value || 0 } }); toast(`${i.name} : ${q.value} ${i.kind === 'piece' ? '' : i.kind} par semaine`); }) }, 'OK'));
+
+async function setStock() {
+  const [stock, ings] = await Promise.all([api('/stock'), api('/ingredients')]);
+  const stockRow = x => {
+    const q = qtyField(x.kind, x.qty, 'Quantité de ' + x.ingredient);
+    const put0 = guard(async qty => { await api('/stock/' + encodeURIComponent(x.ingredient), { method: 'PUT', body: { qty } }); toast(qty > 0 ? 'Stock mis à jour' : 'Retiré du stock'); if (qty <= 0) row.remove(); });
+    const row = h('div', { class: 'stockrow' }, h('strong', {}, x.ingredient), q.el, h('span', { class: 'row' },
+      h('button', { onclick: () => put0(q.get() ?? 0) }, 'OK'), h('button', { class: 'danger', 'aria-label': 'Vider ' + x.ingredient, onclick: () => put0(0) }, 'Vide')));
+    return row;
+  };
+  return [h('h1', {}, 'Stock à la maison'),
+    h('p', { class: 'small muted' }, 'Le stock augmente avec vos achats (surplus compris) et diminue quand les repas passent. Corrigez-le ici si la réalité diffère.'),
+    h('h3', {}, 'Ajouter au stock'),
+    addForm('Quantité', ings.map(i => i.name), async v => { await post('/stock', v); toast('Ajouté au stock'); refresh(); }),
+    h('h3', { style: 'margin-top:1.2rem' }, `En stock (${stock.length})`),
+    stock.length ? stock.map(stockRow) : h('p', { class: 'muted small' }, 'Rien en stock pour le moment.'),
+    h('p', { class: 'small muted' }, 'Pour les produits de base (sel, huile…), ajoutez-les à la liste de courses avec « Ajouter un article » quand il en reste peu.')];
 }
-function verifyRow(i) {
-  const aisles = ['Fruits et légumes', 'Boucherie', 'Poissonnerie', 'Crèmerie', 'Boulangerie', 'Épicerie', 'Conserves', 'Surgelés', 'Boissons', 'Hygiène et maison', 'Divers'];
-  const sel = h('select', { 'aria-label': 'Rayon de ' + i.name }, aisles.map(a => h('option', { value: a, selected: a === i.aisle }, a)));
-  const basic = h('input', { type: 'checkbox', 'aria-label': i.name + ' : produit de base' });
-  return h('div', { class: 'line' }, h('strong', {}, i.name), sel, h('span', { class: 'row' }, h('label', { class: 'inline', style: 'margin:0' }, basic, 'base'), h('button', { onclick: guard(async () => { await api('/ingredients/' + encodeURIComponent(i.name), { method: 'PUT', body: { aisle: sel.value, is_basic: +basic.checked, verified: 1 } }); toast('Enregistré'); refresh(); }) }, 'OK')));
+
+async function setRecurrents() {
+  const [list, ings] = await Promise.all([api('/recurrents'), api('/ingredients')]);
+  const rowFor = r => {
+    const q = qtyField(r.kind, r.weekly_qty, 'Quantité par semaine de ' + r.name), e = r.estimate;
+    const est = e.weekly_qty != null
+      ? `Estimation d'après vos achats : ${fmtBase(e.weekly_qty, r.kind)} par semaine (${e.purchases} achats sur ${e.span_days} jours).`
+      : `Estimation impossible pour l'instant : il faut au moins 2 achats espacés d'une semaine (${e.purchases} enregistré${e.purchases > 1 ? 's' : ''}).`;
+    const row = h('div', { class: 'card' }, h('div', { class: 'between' }, h('strong', {}, r.name), h('span', { class: 'small muted' }, 'par semaine')),
+      h('div', { class: 'row', style: 'margin:.4rem 0' }, q.el,
+        h('button', { onclick: guard(async () => { await api('/ingredients/' + encodeURIComponent(r.name), { method: 'PUT', body: { weekly_qty: q.get() ?? 0 } }); toast('Enregistré'); }) }, 'OK'),
+        h('button', { class: 'danger', onclick: guard(async () => { if (!confirm(`Retirer ${r.name} des produits récurrents ?`)) return; await api('/recurrents/' + encodeURIComponent(r.name), { method: 'DELETE' }); row.remove(); }) }, 'Retirer')),
+      h('div', { class: 'small muted' }, est),
+      e.weekly_qty != null ? h('button', { class: 'link', onclick: guard(async () => { await api('/ingredients/' + encodeURIComponent(r.name), { method: 'PUT', body: { weekly_qty: e.weekly_qty } }); toast('Estimation appliquée'); refresh(); }) }, 'Utiliser cette estimation') : null);
+    return row;
+  };
+  return [h('h1', {}, 'Produits récurrents'),
+    h('p', { class: 'small muted' }, 'Consommation par semaine : le stock baisse chaque jour d\'un septième et l\'article revient dans la liste quand il manque.'),
+    h('h3', {}, 'Ajouter un produit récurrent'),
+    addForm('Quantité / semaine', ings.map(i => i.name), async v => { await post('/recurrents', { name: v.name, weekly_qty: v.qty, unit: v.unit }); toast('Ajouté'); refresh(); }),
+    h('h3', { style: 'margin-top:1.2rem' }, `Liste (${list.length})`),
+    list.length ? list.map(rowFor) : h('p', { class: 'muted small' }, 'Aucun produit récurrent.'),
+    h('p', { class: 'small muted' }, 'L\'estimation vient des achats cochés dans Courses. Elle compte aussi ce qui sert aux recettes (lait d\'une béchamel…) et suppose que le stock était presque vide à chaque rachat : prenez-la comme un ordre de grandeur, elle n\'est jamais appliquée seule.')];
+}
+
+async function setCatalog() {
+  const ings = await api('/ingredients');
+  let onlyCheck = ings.some(i => !i.verified), term = '';
+  const list = h('div', {});
+  const summary = i => (i.pack_qty ? `${i.pack_label || fmtBase(i.pack_qty, i.kind)} · ${i.price != null ? euro(i.price) : 'prix par défaut'}`
+    : `vrac · ${i.price != null ? euro(i.price) + (i.kind === 'g' ? '/kg' : i.kind === 'ml' ? '/L' : '/pièce') : 'prix par défaut'}`);
+  const draw = () => {
+    const rows = ings.filter(i => (!onlyCheck || !i.verified) && i.name.includes(term.toLowerCase()));
+    put(list, rows.length ? rows.slice(0, 80).map(i => h('button', { class: 'item rowbtn', onclick: () => ingredientDialog(i, draw, ings) },
+      h('span', { class: 'grow' }, h('span', { class: 'name blk' }, i.name, i.verified ? null : h('span', { class: 'badge', style: 'margin-left:.4rem' }, 'à vérifier')),
+        h('span', { class: 'small muted blk' }, `${i.aisle} · ${summary(i)}`)))) : h('p', { class: 'muted small' }, 'Aucun ingrédient.'),
+      rows.length > 80 ? h('p', { class: 'small muted' }, `${rows.length - 80} autres : affinez la recherche.`) : null);
+  };
+  draw();
+  return [h('h1', {}, 'Catalogue d\'ingrédients'),
+    h('p', { class: 'small muted' }, 'Touchez un ingrédient pour régler son rayon, son conditionnement (ex. pack de 6 × 1 L, sachet de 1 kg) et son prix. Les courses arrondissent au paquet.'),
+    h('input', { type: 'search', placeholder: 'Rechercher', 'aria-label': 'Rechercher un ingrédient', oninput: e => { term = e.target.value; draw(); } }),
+    h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: onlyCheck, onchange: e => { onlyCheck = e.target.checked; draw(); } }), 'Seulement ceux à vérifier'), list];
+}
+function ingredientDialog(i, redraw, all) {
+  dialog((dlg, close) => {
+    const kind = i.kind;
+    const aisle = h('select', {}, AISLES.map(a => h('option', { value: a, selected: a === i.aisle }, a)));
+    const packed = h('input', { type: 'checkbox', checked: !!i.pack_qty });
+    const count = h('input', { type: 'number', min: 1, step: 1, value: 1, 'aria-label': 'Nombre d\'unités' });
+    const size = qtyField(kind, i.pack_qty || null, 'Contenu de chaque unité');
+    const label = h('input', { value: i.pack_label || '', placeholder: 'ex. sachet 1 kg, pack de 6 × 1 L' });
+    const price = h('input', { type: 'number', min: 0, step: 0.01, inputmode: 'decimal', value: i.price ?? '' });
+    const basic = h('input', { type: 'checkbox', checked: !!i.is_basic });
+    const priceLbl = h('label', {}), totalTxt = h('p', { class: 'small muted' });
+    let manual = !!i.pack_label;
+    label.oninput = () => { manual = true; };
+    const total = () => (size.get() || 0) * (Math.max(1, +count.value || 1));
+    const suggestion = () => !(size.get() > 0) ? '' : (+count.value || 1) > 1 ? `pack de ${+count.value} × ${fmtBase(size.get(), kind)}` : `paquet ${fmtBase(size.get(), kind)}`;
+    const packBox = h('div', {}, h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Nombre d\'unités'), count), h('div', {}, h('label', {}, 'Contenu de chaque unité'), size.el)),
+      totalTxt, h('label', {}, 'Libellé affiché dans les courses'), label);
+    const sync = () => {
+      packBox.hidden = !packed.checked;
+      priceLbl.textContent = packed.checked ? 'Prix d\'un paquet (€)' : kind === 'g' ? 'Prix au kg (€)' : kind === 'ml' ? 'Prix au litre (€)' : 'Prix à la pièce (€)';
+      totalTxt.textContent = total() > 0 ? `Contenu total d'un paquet : ${fmtBase(total(), kind)}` : '';
+      if (packed.checked && !manual) label.value = suggestion();
+    };
+    [packed, count, size.num].forEach(el => el.addEventListener('input', sync)); packed.addEventListener('change', sync); size.sel.addEventListener('change', sync);
+    dlg.append(h('h3', {}, i.name), h('p', { class: 'small muted' }, `${i.n_recipes} recette(s) · unité de base : ${kind === 'g' ? 'grammes' : kind === 'ml' ? 'millilitres' : 'pièces'}`),
+      h('label', {}, 'Rayon'), aisle,
+      h('label', { class: 'inline' }, packed, 'Vendu en paquet ou en pack (sinon : au poids, au volume ou à la pièce)'), packBox, priceLbl, price,
+      h('label', { class: 'inline' }, basic, 'Produit de base (n\'apparaît pas dans les courses)'),
+      h('menu', {}, closeBtn(close),
+        i.n_recipes === 0 ? h('button', { class: 'danger', onclick: guard(async () => {
+          if (!confirm(`Supprimer « ${i.name} » du catalogue ?`)) return;
+          await api('/ingredients/' + encodeURIComponent(i.name), { method: 'DELETE' });
+          all.splice(all.indexOf(i), 1); state.names = []; close(); toast('Supprimé'); redraw();
+        }) }, 'Supprimer') : null,
+        h('button', { class: 'primary', onclick: guard(async () => {
+          const on = packed.checked;
+          if (on && !(total() > 0)) { toast('Indiquez le contenu du paquet'); return; }
+          const body = { aisle: aisle.value, pack_qty: on ? total() : null, pack_label: on ? (label.value.trim() || null) : null,
+            price: price.value === '' ? null : +price.value, is_basic: +basic.checked, verified: 1 };
+          await api('/ingredients/' + encodeURIComponent(i.name), { method: 'PUT', body });
+          Object.assign(i, body); close(); toast('Enregistré'); redraw();
+        }) }, 'Enregistrer')));
+    sync();
+  });
+}
+
+async function setRefused() {
+  let refused = await api('/refused');
+  const list = h('div', {});
+  const draw = () => put(list, refused.length ? refused.map(n => h('span', { class: 'tag', style: 'margin:.2rem' }, n, ' ',
+    h('button', { class: 'link', 'aria-label': 'Retirer ' + n, onclick: guard(async () => { await api('/refused/' + encodeURIComponent(n), { method: 'DELETE' }); refused = refused.filter(x => x !== n); draw(); }) }, '×')))
+    : h('span', { class: 'muted small' }, 'Aucun pour le moment'));
+  draw();
+  const newRef = h('input', { placeholder: 'Ajouter un ingrédient refusé', 'aria-label': 'Ingrédient refusé' });
+  return [h('h1', {}, 'Ingrédients refusés'), h('p', { class: 'small muted' }, 'Aucune recette contenant ces ingrédients n\'est proposée.'), list,
+    h('form', { class: 'row', onsubmit: guard(async ev => { ev.preventDefault(); if (!newRef.value.trim()) return; await post('/refused', { name: newRef.value }); newRef.value = ''; refused = await api('/refused'); draw(); }) },
+      newRef, h('button', { type: 'submit' }, 'Ajouter'))];
+}
+
+async function setData() {
+  return [h('h1', {}, 'Données et compte'),
+    h('p', {}, h('a', { class: 'btn', href: '/api/backup', style: 'display:inline-block;text-decoration:none;padding:.7rem 1rem;border:1px solid var(--line);border-radius:8px' }, 'Télécharger une sauvegarde')),
+    h('p', {}, h('button', { onclick: guard(async () => { await post('/logout'); navigator.serviceWorker?.controller?.postMessage('clear'); localStorage.removeItem(LS.shop); localStorage.removeItem(LS.queue); shop = null; showLogin(); }) }, 'Se déconnecter'))];
 }
 
 // ---------- démarrage ----------

@@ -197,9 +197,14 @@ def resolve(conn, catalog: Catalog, parsed: dict) -> tuple[str, float | None, st
     return name, to_base(parsed["qty"], parsed["unit"], catalog.rows[name]), status
 
 
-def find_or_create(conn, catalog: Catalog, label: str) -> str | None:
+def seed_names() -> set[str]:
+    return {line.split("|")[0].strip() for line in cs.CATALOG.strip().splitlines()}
+
+
+def find_or_create(conn, catalog: Catalog, label: str, kind: str = "piece") -> str | None:
     """Article saisi à la main : l'ingrédient du catalogue s'il existe, sinon un nouvel ingrédient « à vérifier »."""
     label = re.sub(r"\s+", " ", label or "").strip()[:80]
+    label = re.sub(r"^\d+(?:[.,]\d+)?\s+", "", label)   # « 10 yaourt » : la quantité n'est pas le nom
     if not label:
         return None
     name = catalog.exact(label)
@@ -207,7 +212,7 @@ def find_or_create(conn, catalog: Catalog, label: str) -> str | None:
         return name
     name = label.lower()
     conn.execute("INSERT OR IGNORE INTO ingredients(name,aliases,aisle,kind,verified) VALUES(?,?,?,?,0)",
-                 (name, "[]", "Divers", "piece"))
+                 (name, "[]", "Divers", kind))
     catalog.rows[name] = dict(conn.execute("SELECT * FROM ingredients WHERE name=?", (name,)).fetchone())
     catalog.phrases.append((frozenset(tokens(name)), name))
     return name

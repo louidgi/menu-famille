@@ -43,7 +43,25 @@ def process_past(conn) -> None:
     conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('recurrent_day',?)", (today.isoformat(),))
     conn.execute("DELETE FROM plan WHERE day < ?", ((today - timedelta(days=120)).isoformat(),))
     conn.execute("DELETE FROM ops WHERE created_at < ?", ((config.now() - timedelta(days=30)).isoformat(),))
+    conn.execute("DELETE FROM purchases WHERE day < ?", ((today - timedelta(days=400)).isoformat(),))
     conn.commit()
+
+
+def estimate_weekly(conn, name: str) -> dict:
+    """Consommation hebdomadaire estimée d'après les achats des 120 derniers jours.
+Entre le premier et le dernier jour d'achat, tout ce qui a été acheté sauf le dernier lot a été consommé.
+    Hypothèse : le stock était à peu près vide à chaque rachat. Jamais appliquée automatiquement."""
+    since = (config.today() - timedelta(days=120)).isoformat()
+    rows = conn.execute("SELECT day, SUM(qty) AS q FROM purchases WHERE ingredient=? AND day>=? "
+                        "GROUP BY day HAVING q>0 ORDER BY day", (name, since)).fetchall()
+    out = {"purchases": len(rows), "span_days": 0, "weekly_qty": None}
+    if len(rows) < 2:
+        return out
+    span = (date.fromisoformat(rows[-1]["day"]) - date.fromisoformat(rows[0]["day"])).days
+    out["span_days"] = span
+    if span >= 7:
+        out["weekly_qty"] = round(sum(r["q"] for r in rows[:-1]) / span * 7, 1)
+    return out
 
 
 def needs_detail(conn) -> tuple[dict, int, dict]:
@@ -164,14 +182,14 @@ def apply_ops(conn, ops: list[dict]) -> dict:
         qty = float(op.get("qty") or 0)
         if kind == "buy":
             add_stock(conn, name, max(0.0, qty))
-            conn.execute("UPDATE shop_state SET bought_qty = CASE WHEN checked_on=? THEN COALESCE(bought_qty,0)+? ELSE ? END, "
-                         "checked_on=?, forced=0, archived_need=NULL WHERE ingredient=?",
-                         (today, max(0.0, qty), max(0.0, qty), today, name))
+            if amount > 0:
+                conn.execute("INSERT INTO purchases(ingredient,qty,day) VALUES(?,?,?)", (name, -amount, today))
         elif kind == "unbuy":
             row = conn.execute("SELECT bought_qty FROM shop_state WHERE ingredient=?", (name,)).fetchone()
             amount = row["bought_qty"] if row and row["bought_qty"] is not None else max(0.0, qty)  # repli : ancien comportement
             add_stock(conn, name, -amount)
-            conn.execute("UPDATE shop_state SET checked_on=NULL, bought_qty=NULL WHERE ingredient=?", (name,))
+            if amount > 0:
+                conn.execute("INSERT INTO purchases(ingredient,qty,day) VALUES(?,?,?)", (name, -amount, today))
         elif kind == "have":  # « déjà à la maison » : le stock couvre le besoin, sans achat
             need, _ = needs(conn)
             have = conn.execute("SELECT qty FROM stock WHERE ingredient=?", (name,)).fetchone()
