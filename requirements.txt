@@ -23,7 +23,7 @@ pydantic_core==2.50.4
 pyparsing==3.3.3
 pyrdfa3==3.6.5
 rdflib==7.6.0
-recipe_scrapers==15.13.0
+recipe_scrapers==15.14.0
 requests==2.34.2
 six==1.17.0
 soupsieve==4.1.1
