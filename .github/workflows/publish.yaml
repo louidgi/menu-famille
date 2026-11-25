@@ -23,7 +23,7 @@ jobs:
             id-token: write
         steps:
             - uses: actions/checkout@v7
-            - uses: docker/setup-buildx-action@v3
+            - uses: docker/setup-buildx-action@v4
             - name: Connexion au registre
               uses: docker/login-action@d0b8297dd55199249f38268efae35fcb03f75aab
               with:
