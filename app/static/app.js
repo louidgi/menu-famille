@@ -57,10 +57,34 @@ function dialog(build) {
 }
 const closeBtn = (close, label = 'Annuler') => h('button', { type: 'button', onclick: close }, label);
 
+
+// ---------- écran allumé (page recette) ----------
+const WAKE_KEY = 'mf_wake';
+let wakeLock = null, wakeWanted = false, wakePending = false;
+async function wakeSync() {
+  if (!('wakeLock' in navigator)) return;
+  if (wakeWanted && !wakeLock && !wakePending && document.visibilityState === 'visible') {
+    wakePending = true;
+    try {
+      const l = await navigator.wakeLock.request('screen');
+      if (!wakeWanted) { l.release().catch(() => {}); return; }   // on a quitté la page pendant la demande
+      wakeLock = l;
+      l.addEventListener('release', () => { if (wakeLock === l) wakeLock = null; });
+    } catch { /* refus (économiseur de batterie…) : on continue sans */ }
+    finally { wakePending = false; }
+  } else if (!wakeWanted && wakeLock) {
+    const l = wakeLock; wakeLock = null; l.release().catch(() => {});
+  }
+}
+// Le navigateur libère le verrou quand l'onglet est masqué : on le reprend au retour.
+document.addEventListener('visibilitychange', wakeSync);
+
+
 // ---------- routage ----------
 let state = { settings: null, names: [] };
 async function route() {
   const hash = location.hash || '#/menus';
+  wakeWanted = false; wakeSync();
   curHash = hash; dirty = false; document.body.classList.remove('sb');
   const [, tab, arg] = hash.split('/');
   document.querySelectorAll('#tabs a').forEach(a => a.toggleAttribute('aria-current', a.dataset.tab === (tab === 'recette' ? 'recettes' : tab)) || a.removeAttribute('aria-current'));
@@ -87,6 +111,7 @@ const refresh = () => route();
 
 // ---------- connexion ----------
 function showLogin() {
+  wakeWanted = false; wakeSync();
   $('#tabs').hidden = true;
   const pw = h('input', { type: 'password', autocomplete: 'current-password', required: true, id: 'pw' });
   const err = h('p', { class: 'badge', hidden: true });
@@ -201,6 +226,7 @@ async function viewRecipes() {
   draw('');
   return [h('div', { class: 'between' }, h('h1', {}, 'Recettes'), h('button', { class: 'primary', onclick: () => addRecipeDialog() }, 'Ajouter')), q, h('p', { class: 'muted small' }, `${list.length} recettes en bibliothèque`), ul];
 }
+
 function addRecipeDialog() {
   dialog((dlg, close) => {
     const url = h('input', { type: 'url', placeholder: 'https://www.marmiton.org/recettes/…' });
@@ -259,12 +285,18 @@ async function recipeForm(draft, existingId) {
 }
 async function viewRecipe(id) {
   const r = await api('/recipes/' + id);
+  const wakePref = lsGet(WAKE_KEY, true);
+  wakeWanted = wakePref; wakeSync();
+  const wakeBox = 'wakeLock' in navigator ? h('label', { class: 'inline' },
+    h('input', { type: 'checkbox', checked: wakePref, onchange: e => { lsSet(WAKE_KEY, e.target.checked); wakeWanted = e.target.checked; wakeSync(); } }),
+    'Garder l\'écran allumé') : null;
   const src = r.source_url && safeUrl(r.source_url);
   const rate = (rating, favorite) => guard(async () => { await post(`/recipes/${id}/rate`, { rating, favorite }); toast('Noté'); refresh(); });
   return [h('p', {}, h('button', { class: 'link', onclick: () => history.back() }, '← Retour')), h('h1', {}, r.title),
     h('p', { class: 'muted' }, [r.prep_min ? `préparation ${r.prep_min} min` : null, r.cook_min ? `cuisson ${r.cook_min} min` : null, PROT[r.protein], `≈ ${euro(r.cost)} pour la famille`].filter(Boolean).join(' · ')),
     h('h3', {}, `Ingrédients pour la famille (${String(r.family_portions).replace('.', ',')} portions d'adulte)`),
     h('ul', { class: 'ing' }, r.ingredients.map(i => h('li', {}, i.basic ? h('span', { class: 'muted' }, `${i.ingredient} (au goût)`) : [i.text ? i.text + ' ' : '', i.ingredient, i.optional ? ' (facultatif)' : '', i.verified ? null : h('span', { class: 'badge', style: 'margin-left:.4rem' }, 'à vérifier')]))),
+    wakeBox,
     h('h3', { style: 'margin-top:1rem' }, 'Préparation'), h('p', { class: 'small muted' }, 'Touchez une étape pour la barrer.'),
     h('ol', { class: 'steps' }, r.steps.map(s => h('li', { onclick: ev => ev.currentTarget.classList.toggle('done') }, s))),
     src ? h('p', {}, 'Recette d\'origine : ', h('a', { href: src, target: '_blank', rel: 'noopener noreferrer' }, new URL(src).hostname)) : null,
